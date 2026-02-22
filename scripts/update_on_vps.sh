@@ -24,8 +24,11 @@ else
   echo "   (SKIP_PULL=1, пропуск)"
 fi
 
-echo "🔨 Сборка и запуск контейнеров (данные и volumes не трогаем)"
+echo "🔨 Остановка контейнеров (volumes и данные сохраняются)"
 cd "$INFRA"
+docker-compose $COMPOSE_OPTS down
+
+echo "🔨 Сборка и запуск контейнеров"
 docker-compose $COMPOSE_OPTS build --no-cache
 docker-compose $COMPOSE_OPTS up -d
 

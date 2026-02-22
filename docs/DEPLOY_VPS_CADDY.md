@@ -163,8 +163,11 @@ cd /opt/tutorbot && ./scripts/update_on_vps.sh
 Скрипт сам:
 - выполняет `git pull origin main`;
 - подставляет `docker-compose.vps-ports.yml` (порты 5433/6380), если файл есть;
+- останавливает контейнеры (`down` **без** `-v` — данные и volumes не удаляются);
 - собирает образы и запускает контейнеры (`build --no-cache` и `up -d`);
 - применяет миграции БД (`alembic upgrade head`).
+
+Такой порядок (сначала `down`, затем `up -d`) избегает ошибки `KeyError: 'ContainerConfig'` у старого docker-compose при пересоздании контейнеров.
 
 Опционально: `SKIP_PULL=1 ./scripts/update_on_vps.sh` — не делать `git pull` (например, уже подтянули вручную). `BRANCH=develop` — другая ветка.
 
