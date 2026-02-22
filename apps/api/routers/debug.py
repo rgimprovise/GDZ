@@ -645,7 +645,7 @@ def list_pdf_sources(db: Session = Depends(get_db)):
     """
     for row in rows:
         status_cls = {"pending": "text-yellow-600", "ocr": "text-blue-600", "done": "text-green-600", "failed": "text-red-600"}.get(row.status, "text-gray-600")
-        can_start = row.status in ("pending", "failed")
+        can_start = row.status in ("pending", "failed", "ocr")
         btn = f"""<button type="button" hx-post="/debug/api/start-ocr/{row.id}" hx-target="#start-ocr-result-{row.id}" hx-swap="innerHTML" hx-indicator="#ocr-indicator-{row.id}"
                 class="px-3 py-1 bg-amber-500 text-white rounded text-xs hover:bg-amber-600">Начать OCR</button>
                 <span id="ocr-indicator-{row.id}" class="htmx-indicator ml-1">...</span>
@@ -716,7 +716,16 @@ async def upload_pdf(
             db.refresh(book)
         existing_ps = db.query(PdfSource).filter(PdfSource.minio_key == minio_key).first()
         if existing_ps:
-            return f"<p class='text-amber-600'>Источник с таким файлом уже есть: id={existing_ps.id}</p>"
+            existing_ps.original_filename = file.filename
+            existing_ps.file_size_bytes = dest.stat().st_size
+            existing_ps.status = "pending"
+            existing_ps.error_message = None
+            existing_ps.page_count = None
+            db.commit()
+            db.refresh(existing_ps)
+            pdf_source = existing_ps
+            msg = f"<p class='text-green-600'>Файл обновлён, источник id={pdf_source.id}. Нажмите «Начать OCR».</p>"
+            return HTMLResponse(content=msg, headers={"HX-Trigger": "refreshPdfSources"})
         pdf_source = PdfSource(
             book_id=book.id,
             minio_key=minio_key,
