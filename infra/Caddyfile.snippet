@@ -1,0 +1,12 @@
+# TutorBot API — фрагмент для Caddy (добавить в общий Caddyfile или включить через import).
+# Замените tutorbot.example.com на ваш домен/поддомен.
+# API слушает на localhost:8000 (Docker: порт 8000 проброшен на хост).
+
+tutorbot.example.com {
+    reverse_proxy localhost:8000
+}
+
+# После добавления: sudo systemctl reload caddy
+# Debug-панель: https://tutorbot.example.com/debug
+# Swagger:     https://tutorbot.example.com/docs
+# Health:      https://tutorbot.example.com/health

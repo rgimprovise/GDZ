@@ -1,0 +1,17 @@
+# Локальный запуск только API (и опционально bot) при подключении к VPS.
+# Использование: docker compose -f docker-compose.yml -f docker-compose.local-api.yml up -d api
+# Переменные POSTGRES_HOST, REDIS_URL должны указывать на VPS (напрямую или через туннель).
+# На хосте перед запуском: ssh -L 15432:localhost:5432 -L 16379:localhost:6379 user@VPS_IP -N
+# В .env.local: POSTGRES_HOST=host.docker.internal, POSTGRES_PORT=15432, REDIS_URL=redis://host.docker.internal:16379/0
+
+services:
+  api:
+    environment:
+      - POSTGRES_HOST=${POSTGRES_HOST:-host.docker.internal}
+      - POSTGRES_PORT=${POSTGRES_PORT:-15432}
+      - REDIS_URL=${REDIS_URL:-redis://host.docker.internal:16379/0}
+    depends_on: []   # убираем зависимость от postgres/redis/minio в этом compose
+
+  bot:
+    depends_on:
+      - api

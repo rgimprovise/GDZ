@@ -1,0 +1,37 @@
+# Env and secrets
+.env
+.env.local
+*.env
+!env.example
+!*.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.so
+.venv/
+venv/
+.env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (large files)
+data/pdfs/*.pdf
+data/pdfs/*.PDF
+data/ocr_raw/
+data/ocr_normalized/
+
+# Build / Docker
+*.log
+.dump
+*.dump
