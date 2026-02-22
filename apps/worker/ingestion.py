@@ -1,10 +1,11 @@
 """
 PDF Ingestion Pipeline
 
-Пайплайн: OCR → сырой текст в файлы → нормализация → нормализованный файл → импорт в БД.
+Пайплайн: OCR → сырой текст в файлы → нормализация → LLM-коррекция формул/OCR → нормализованный файл → импорт в БД.
 1. OCR (Tesseract) по всем страницам → запись в data/ocr_raw/{book_id}/{source_id}_{model}.md
-2. Нормализация (ocr_cleaner) по страницам → запись в data/ocr_normalized/{book_id}/{source_id}.md
-3. Импорт в БД: только нормализованный текст в pdf_pages.ocr_text, сегментация задач и теории.
+2. Нормализация (ocr_cleaner) по страницам.
+3. LLM-коррекция (OpenAI): исправление ошибок OCR и приведение формул к формату для БД/чата (без шаблонных замен).
+4. Запись в data/ocr_normalized/{book_id}/{source_id}.md и импорт в БД (pdf_pages, сегментация задач и теории).
 
 Usage:
     process_pdf_source(pdf_source_id=1)   # полный цикл OCR → файлы → БД
@@ -174,7 +175,7 @@ def process_pdf_source(pdf_source_id: int, local_pdf_path: Optional[str] = None)
             raw_path = write_raw_md(book_id, pdf_source_id, model_used, raw_texts)
             print(f"   📁 Raw OCR: {raw_path}")
         
-        # —— 2. Нормализация по страницам, запись в нормализованный файл ——
+        # —— 2. Нормализация по страницам (ocr_cleaner) ——
         normalized_texts = []
         for i, t in enumerate(raw_texts):
             if HAS_OCR_CLEANER and (t or "").strip():
@@ -186,7 +187,18 @@ def process_pdf_source(pdf_source_id: int, local_pdf_path: Optional[str] = None)
                     normalized_texts.append(t or "")
             else:
                 normalized_texts.append(t or "")
-        
+
+        # —— 2b. LLM-коррекция формул и ошибок OCR (OpenAI) ——
+        try:
+            from llm_ocr_correct import correct_normalized_pages
+            book = db.query(Book).filter(Book.id == book_id).first()
+            subject = (book.subject if book else "geometry") or "geometry"
+            print(f"   🤖 LLM-коррекция формул/OCR (предмет: {subject})...")
+            normalized_texts = correct_normalized_pages(normalized_texts, subject=subject)
+        except Exception as e:
+            print(f"   ⚠️ LLM-коррекция пропущена: {e}")
+
+        # —— 2c. Запись нормализованного файла ——
         if HAS_OCR_FILES and normalized_texts:
             norm_path = write_normalized_md(book_id, pdf_source_id, normalized_texts)
             print(f"   📁 Normalized: {norm_path}")
