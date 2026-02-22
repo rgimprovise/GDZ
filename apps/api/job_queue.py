@@ -66,13 +66,13 @@ def enqueue_llm_normalize(pdf_source_id: int) -> str:
 
 def enqueue_import_from_normalized(pdf_source_id: int) -> str:
     """
-    Enqueue import from normalized .md into DB (segment problems, section theory).
-    Worker runs ingestion.import_from_normalized_file(pdf_source_id).
+    Enqueue distribution from normalized .md into DB via LLM (see docs/LLM_DISTRIBUTION_DESIGN.md).
+    Worker runs ingestion.import_from_normalized_file_llm(pdf_source_id). БД перезаписывается.
     """
     job = ingestion_queue.enqueue(
-        "ingestion.import_from_normalized_file",
+        "ingestion.import_from_normalized_file_llm",
         pdf_source_id,
-        job_timeout="15m",
+        job_timeout="30m",
         result_ttl=3600,
     )
     return job.id

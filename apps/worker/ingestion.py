@@ -680,6 +680,135 @@ def import_from_normalized_file(pdf_source_id: int) -> dict:
         db.close()
 
 
+def import_from_normalized_file_llm(pdf_source_id: int) -> dict:
+    """
+    Распределение по БД на основе решений LLM (см. docs/LLM_DISTRIBUTION_DESIGN.md).
+    Читает нормализованный .md → препроцессинг блоков → LLM батчами → полная перезапись
+    данных по этому источнику: pdf_pages, problems, section_theory (по книге).
+    """
+    from models import PdfSource, PdfPage, Problem, SectionTheory
+
+    if not HAS_OCR_FILES:
+        return {"status": "error", "message": "ocr_files module not available"}
+
+    db = SessionLocal()
+    try:
+        pdf_source = db.query(PdfSource).filter(PdfSource.id == pdf_source_id).first()
+        if not pdf_source:
+            return {"status": "error", "message": f"PdfSource {pdf_source_id} not found"}
+        book_id = pdf_source.book_id
+        from models import Book
+        book = db.query(Book).filter(Book.id == book_id).first()
+        subject = (book.subject if book else "geometry") or "geometry"
+
+        path = get_ocr_normalized_path(book_id, pdf_source_id)
+        if not path.exists():
+            return {"status": "error", "message": f"Normalized file not found: {path}"}
+
+        pages_data = read_normalized_pages(book_id, pdf_source_id)
+        if not pages_data:
+            return {"status": "error", "message": "No pages in normalized file or parse error"}
+
+        def progress(batch_idx: int, total: int) -> None:
+            print(f"   📦 Распределение LLM: батч {batch_idx}/{total}")
+
+        from llm_distribute import distribute_batches
+        parsed = distribute_batches(pages_data, subject, progress_callback=progress)
+        if not parsed:
+            return {"status": "error", "message": "LLM не вернул блоки (проверь OPENAI_API_KEY и формат ответа)"}
+
+        # Полная перезапись: удаляем старые данные по источнику и теорию по книге
+        existing_pages = db.query(PdfPage).filter(PdfPage.pdf_source_id == pdf_source_id).all()
+        for p in existing_pages:
+            db.query(Problem).filter(Problem.source_page_id == p.id).delete()
+        db.query(PdfPage).filter(PdfPage.pdf_source_id == pdf_source_id).delete()
+        db.query(SectionTheory).filter(SectionTheory.book_id == book_id).delete()
+        db.flush()
+
+        # Восстанавливаем pdf_pages из файла (ocr_text по страницам)
+        page_num_to_id: dict[int, int] = {}
+        for page_num_1based, text in pages_data:
+            page_num = page_num_1based - 1
+            pdf_page = PdfPage(
+                pdf_source_id=pdf_source_id,
+                page_num=page_num,
+                ocr_text=text,
+                ocr_confidence=70,
+            )
+            db.add(pdf_page)
+            db.flush()
+            page_num_to_id[page_num_1based] = pdf_page.id
+
+        # Теория: объединяем блоки по section
+        theory_by_section: dict[str, list[str]] = {}
+        for b in parsed:
+            t = (b.get("type") or "").lower()
+            if t not in ("section_theory", "theory"):
+                continue
+            sec = (b.get("section") or "").strip() or None
+            if not sec:
+                continue
+            theory_text = (b.get("theory_text") or "").strip()
+            if not theory_text:
+                continue
+            if not sec.startswith("§"):
+                sec = f"§{sec.lstrip()}"
+            if sec not in theory_by_section:
+                theory_by_section[sec] = []
+            theory_by_section[sec].append(theory_text)
+
+        for section_label, texts in theory_by_section.items():
+            theory_text = "\n\n".join(texts).strip()
+            if len(theory_text) < 30:
+                continue
+            db.add(SectionTheory(book_id=book_id, section=section_label, theory_text=theory_text, page_ref=None))
+
+        # Задачи из блоков type=problem
+        problems_found = 0
+        for b in parsed:
+            if (b.get("type") or "").lower() != "problem":
+                continue
+            problem_text = (b.get("problem_text") or "").strip()
+            if not problem_text:
+                continue
+            page_num_1 = b.get("_page_num") or 1
+            source_page_id = page_num_to_id.get(page_num_1)
+            if not source_page_id:
+                source_page_id = next(iter(page_num_to_id.values()), None)
+            sec = (b.get("section") or "").strip() or None
+            if sec and not sec.startswith("§"):
+                sec = f"§{sec.lstrip()}"
+            db.add(Problem(
+                book_id=book_id,
+                source_page_id=source_page_id,
+                number=b.get("number"),
+                section=sec,
+                problem_text=problem_text,
+                solution_text=(b.get("solution_text") or "").strip() or None,
+                answer_text=(b.get("answer_text") or "").strip() or None,
+                page_ref=f"стр. {page_num_1}" if page_num_1 else None,
+                confidence=70,
+            ))
+            problems_found += 1
+
+        pdf_source.status = "done"
+        db.commit()
+        theory_count = len(theory_by_section)
+        print(f"   ✅ Распределение LLM: {len(pages_data)} страниц, {problems_found} задач, {theory_count} параграфов теории")
+        return {
+            "status": "success",
+            "pdf_source_id": pdf_source_id,
+            "pages_imported": len(pages_data),
+            "problems_found": problems_found,
+            "section_theory_saved": theory_count,
+        }
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+
+
 def reanalyze_pdf_source(pdf_source_id: int) -> dict:
     """
     Повторный анализ уже нормализованных текстов: по ocr_text из pdf_pages
