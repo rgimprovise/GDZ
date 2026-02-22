@@ -509,6 +509,46 @@ def extract_and_save_section_theory(db, book_id: int, pdf_source_id: int) -> Opt
     return saved if merged else None
 
 
+def run_llm_normalize_only(pdf_source_id: int) -> dict:
+    """
+    Только LLM-нормализация: прочитать существующий нормализованный файл,
+    прогнать через OpenAI (исправление формул/OCR), перезаписать файл и переимпортировать в БД.
+    Не запускает OCR — используется когда нормализованный файл уже есть (например после полного пайплайна).
+    """
+    from models import PdfSource, Book
+
+    db = SessionLocal()
+    try:
+        pdf_source = db.query(PdfSource).filter(PdfSource.id == pdf_source_id).first()
+        if not pdf_source:
+            return {"status": "error", "message": f"PdfSource {pdf_source_id} not found"}
+        book_id = pdf_source.book_id
+        book = db.query(Book).filter(Book.id == book_id).first()
+        subject = (book.subject if book else "geometry") or "geometry"
+    finally:
+        db.close()
+
+    if not HAS_OCR_FILES:
+        return {"status": "error", "message": "ocr_files module not available"}
+
+    pages_data = read_normalized_pages(book_id, pdf_source_id)
+    if not pages_data:
+        return {"status": "error", "message": "Нормализованный файл не найден. Сначала выполните OCR (Начать OCR)."}
+
+    page_texts = [t for _, t in sorted(pages_data, key=lambda x: x[0])]
+    print(f"   📄 LLM-нормализация источника {pdf_source_id}: {len(page_texts)} страниц (без перезапуска OCR)")
+
+    try:
+        from llm_ocr_correct import correct_normalized_pages
+        corrected = correct_normalized_pages(page_texts, subject=subject)
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+    write_normalized_md(book_id, pdf_source_id, corrected)
+    print(f"   📁 Файл обновлён, переимпорт в БД...")
+    return import_from_normalized_file(pdf_source_id)
+
+
 def import_from_normalized_file(pdf_source_id: int) -> dict:
     """
     Импорт в БД только из нормализованного файла (без OCR).

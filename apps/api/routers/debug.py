@@ -23,7 +23,7 @@ from sqlalchemy.exc import ProgrammingError
 from database import get_db
 from models import Book, PdfSource, Query, User
 from config import get_settings
-from job_queue import enqueue_ingestion
+from job_queue import enqueue_ingestion, enqueue_llm_normalize
 
 router = APIRouter(prefix="/debug", tags=["Debug"])
 settings = get_settings()
@@ -646,10 +646,15 @@ def list_pdf_sources(db: Session = Depends(get_db)):
     for row in rows:
         status_cls = {"pending": "text-yellow-600", "ocr": "text-blue-600", "done": "text-green-600", "failed": "text-red-600"}.get(row.status, "text-gray-600")
         can_start = row.status in ("pending", "failed", "ocr")
-        btn = f"""<button type="button" hx-post="/debug/api/start-ocr/{row.id}" hx-target="#start-ocr-result-{row.id}" hx-swap="innerHTML" hx-indicator="#ocr-indicator-{row.id}"
+        start_ocr_btn = f"""<button type="button" hx-post="/debug/api/start-ocr/{row.id}" hx-target="#start-ocr-result-{row.id}" hx-swap="innerHTML" hx-indicator="#ocr-indicator-{row.id}"
                 class="px-3 py-1 bg-amber-500 text-white rounded text-xs hover:bg-amber-600">Начать OCR</button>
                 <span id="ocr-indicator-{row.id}" class="htmx-indicator ml-1">...</span>
-                <span id="start-ocr-result-{row.id}"></span>""" if can_start else f"<span class='text-gray-400'>—</span>"
+                <span id="start-ocr-result-{row.id}"></span>""" if can_start else ""
+        llm_btn = f"""<button type="button" hx-post="/debug/api/run-llm-normalize/{row.id}" hx-target="#llm-result-{row.id}" hx-swap="innerHTML" hx-indicator="#llm-indicator-{row.id}"
+                class="px-3 py-1 bg-violet-500 text-white rounded text-xs hover:bg-violet-600 ml-1">LLM нормализация</button>
+                <span id="llm-indicator-{row.id}" class="htmx-indicator ml-1">...</span>
+                <span id="llm-result-{row.id}"></span>"""
+        btn = (start_ocr_btn + " " + llm_btn).strip() if (start_ocr_btn or llm_btn) else "<span class='text-gray-400'>—</span>"
         html += f"""
         <tr class="border-b hover:bg-gray-50">
             <td class="px-3 py-2">{row.id}</td>
@@ -757,6 +762,19 @@ def start_ocr(pdf_source_id: int, db: Session = Depends(get_db)):
         if not ps:
             return "<span class='text-red-500'>Источник не найден</span>"
         job_id = enqueue_ingestion(pdf_source_id)
+        return f"<span class='text-green-600'>В очереди (job {job_id[:8]}…)</span>"
+    except Exception as e:
+        return f"<span class='text-red-500'>{e}</span>"
+
+
+@router.post("/api/run-llm-normalize/{pdf_source_id}", response_class=HTMLResponse)
+def run_llm_normalize(pdf_source_id: int, db: Session = Depends(get_db)):
+    """Поставить в очередь только LLM-нормализацию (без перезапуска OCR)."""
+    try:
+        ps = db.query(PdfSource).filter(PdfSource.id == pdf_source_id).first()
+        if not ps:
+            return "<span class='text-red-500'>Источник не найден</span>"
+        job_id = enqueue_llm_normalize(pdf_source_id)
         return f"<span class='text-green-600'>В очереди (job {job_id[:8]}…)</span>"
     except Exception as e:
         return f"<span class='text-red-500'>{e}</span>"

@@ -47,3 +47,17 @@ def enqueue_ingestion(pdf_source_id: int) -> str:
         result_ttl=3600,
     )
     return job.id
+
+
+def enqueue_llm_normalize(pdf_source_id: int) -> str:
+    """
+    Enqueue only LLM normalization: read normalized file → OpenAI correct → write → re-import.
+    Worker runs ingestion.run_llm_normalize_only(pdf_source_id).
+    """
+    job = ingestion_queue.enqueue(
+        "ingestion.run_llm_normalize_only",
+        pdf_source_id,
+        job_timeout="15m",
+        result_ttl=3600,
+    )
+    return job.id
