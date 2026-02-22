@@ -60,4 +60,19 @@ def enqueue_llm_normalize(pdf_source_id: int) -> str:
         job_timeout="15m",
         result_ttl=3600,
     )
+    redis_conn.setex(f"llm_norm_job_id:{pdf_source_id}", 3600, job.id)
+    return job.id
+
+
+def enqueue_import_from_normalized(pdf_source_id: int) -> str:
+    """
+    Enqueue import from normalized .md into DB (segment problems, section theory).
+    Worker runs ingestion.import_from_normalized_file(pdf_source_id).
+    """
+    job = ingestion_queue.enqueue(
+        "ingestion.import_from_normalized_file",
+        pdf_source_id,
+        job_timeout="15m",
+        result_ttl=3600,
+    )
     return job.id

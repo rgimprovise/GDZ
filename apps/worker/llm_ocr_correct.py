@@ -12,6 +12,11 @@ import re
 from pathlib import Path
 from typing import Callable, List, Optional
 
+
+class LLMCancelRequested(Exception):
+    """Запрошена остановка LLM-нормализации пользователем."""
+    pass
+
 # Регулярка для разбора ответа по блокам ## Страница N
 PAGE_HEADER = re.compile(r"^##\s+Страница\s+(\d+)\s*$", re.IGNORECASE)
 
@@ -102,6 +107,7 @@ def correct_normalized_pages(
     model: Optional[str] = None,
     checkpoint_path: Optional[Path] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> List[str]:
     """
     Прогнать нормализованный постраничный текст через OpenAI для исправления OCR и формул.
@@ -138,32 +144,35 @@ def correct_normalized_pages(
     client = OpenAI(api_key=OPENAI_API_KEY)
     model_name = model or os.environ.get("OPENAI_MODEL_TEXT", OPENAI_MODEL)
     total_pages = len(page_texts)
-    result: List[str] = _load_checkpoint(checkpoint_path, total_pages, page_texts) if checkpoint_path else [""] * total_pages
-    # Заполнить незачекпоинченные позиции исходным текстом для fallback
-    for i in range(total_pages):
-        if not result[i]:
-            result[i] = page_texts[i] if i < len(page_texts) else ""
-
-    resumed = sum(1 for i in range(total_pages) if result[i] and result[i] != (page_texts[i] if i < len(page_texts) else ""))
-    if checkpoint_path and checkpoint_path.exists() and resumed > 0:
-        print(f"   📂 Продолжение с чекпоинта: уже обработано ~{resumed} страниц")
+    done_indices: set[int] = set()
+    if checkpoint_path:
+        result, done_indices = _load_checkpoint(checkpoint_path, total_pages, page_texts)
+        if done_indices:
+            print(f"   📂 Продолжение с чекпоинта: уже обработано {len(done_indices)} страниц")
+    else:
+        result = [page_texts[i] if i < len(page_texts) else "" for i in range(total_pages)]
 
     total_batches = (total_pages + batch_size - 1) // batch_size
 
     for batch_idx in range(total_batches):
+        if cancel_check and cancel_check():
+            print("   ⏹ Остановка по запросу пользователя")
+            for i in range(len(result)):
+                if not result[i] and i < len(page_texts):
+                    result[i] = page_texts[i]
+            if checkpoint_path:
+                try:
+                    _save_checkpoint(checkpoint_path, result, done_indices)
+                except Exception:
+                    pass
+            raise LLMCancelRequested()
+
         start = batch_idx * batch_size
         end = min(start + batch_size, total_pages)
-        # Пропускаем батч, если все страницы уже есть в чекпоинте (по признаку «ответ не пустой и не равен исходнику»)
-        if checkpoint_path:
-            from llm_ocr_correct import _parse_pages_from_response
-            already_done = all(
-                result[i] and (result[i] != (page_texts[i] if i < len(page_texts) else ""))
-                for i in range(start, end)
-            )
-            if already_done:
-                if progress_callback:
-                    progress_callback(end, total_pages)
-                continue
+        if checkpoint_path and all(i in done_indices for i in range(start, end)):
+            if progress_callback:
+                progress_callback(end, total_pages)
+            continue
 
         batch = page_texts[start:end]
         chunk = _build_batch_chunk(batch, start)

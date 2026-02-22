@@ -555,8 +555,21 @@ def run_llm_normalize_only(pdf_source_id: int) -> dict:
             except Exception:
                 pass
 
+    cancel_key = f"cancel_llm:{pdf_source_id}"
+
+    def cancel_check() -> bool:
+        if not redis_conn:
+            return False
+        try:
+            if redis_conn.get(cancel_key):
+                redis_conn.delete(cancel_key)
+                return True
+        except Exception:
+            pass
+        return False
+
     try:
-        from llm_ocr_correct import correct_normalized_pages
+        from llm_ocr_correct import correct_normalized_pages, LLMCancelRequested
         if redis_conn:
             try:
                 redis_conn.setex(progress_key, 3600, f"0/{total}")
@@ -567,7 +580,15 @@ def run_llm_normalize_only(pdf_source_id: int) -> dict:
             subject=subject,
             checkpoint_path=checkpoint_path,
             progress_callback=progress_callback,
+            cancel_check=cancel_check,
         )
+    except LLMCancelRequested:
+        if redis_conn:
+            try:
+                redis_conn.delete(progress_key)
+            except Exception:
+                pass
+        return {"status": "cancelled", "message": "Остановлено пользователем. Можно продолжить повторным нажатием «LLM нормализация»."}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
