@@ -219,6 +219,17 @@ docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml run --rm po
 docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml run --rm redis
 ```
 
+Если при `run --rm` оба сервиса стартуют без ошибок — образы и конфиг в порядке; однократный `run --rm postgres` уже инициализирует volume. Тогда снова поднимите стек и проверьте статус:
+
+```bash
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps -a
+```
+
+Если при `up -d` снова Exit 128 — проверьте, не заняты ли порты на хосте: `ss -tlnp | grep -E '5433|6380'`. Затем запустите стек в foreground (без `-d`), чтобы увидеть вывод всех сервисов при старте: `docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up`.
+
+**Redis:** предупреждение про `vm.overcommit_memory` можно убрать на VPS: `sudo sysctl vm.overcommit_memory=1` (постоянно: добавить в `/etc/sysctl.conf` и перезагрузка).
+
 **Частые причины:**
 - **Postgres или Redis в Exit 128** — тогда api/worker не стартуют. Проверьте логи postgres и redis (команды ниже), затем перезапустите стек.
 - Запуск без override портов при занятых 5432/6379 — Postgres/Redis не поднимаются. Всегда используйте `-f docker-compose.vps-ports.yml` на этом VPS.
