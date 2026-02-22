@@ -344,6 +344,23 @@ $COMPOSE down && $COMPOSE up -d
 
 Если после строки `ingestion: ingestion.process_pdf_source(1)` в логах нет вывода (нет «Processing PDF source», «OCR: Tesseract») — включён небуферизованный вывод: в контейнере worker задано `PYTHONUNBUFFERED=1`. После обновления и перезапуска worker логи должны появляться по мере выполнения. Если задача падает сразу — проверьте, что PDF доступен воркеру: `docker exec tutorbot_worker ls -la /app/data/pdfs/`.
 
+**Проверка файлов после OCR (сырой и нормализованный текст):**  
+На хосте каталог `data` смонтирован в `/opt/tutorbot/data`. После успешного OCR должны появиться:
+- сырой OCR: `data/ocr_raw/{book_id}/{pdf_source_id}_tesseract.md`
+- нормализованный (для следующего шага/импорта): `data/ocr_normalized/{book_id}/{pdf_source_id}.md`
+
+```bash
+# Список и размер файлов (book_id=1, pdf_source_id=1)
+ls -la /opt/tutorbot/data/ocr_raw/1/
+ls -la /opt/tutorbot/data/ocr_normalized/1/
+
+# Размер и число строк нормализованного файла
+wc -l /opt/tutorbot/data/ocr_normalized/1/1.md
+head -80 /opt/tutorbot/data/ocr_normalized/1/1.md
+```
+
+Или из контейнера: `docker exec tutorbot_worker ls -la /app/data/ocr_normalized/1/` и `docker exec tutorbot_worker head -80 /app/data/ocr_normalized/1/1.md`.
+
 ---
 
 ## 8. Итог
