@@ -180,8 +180,20 @@ cd /opt/tutorbot/infra
 
 # 1. Все ли контейнеры запущены? (должны быть Up)
 docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps -a
+```
 
-# 2. Логи API — нет ли падения при старте (--tail перед именем сервиса)
+**Если при `up -d` падает с `KeyError: 'ContainerConfig'`** (часто после добавления volume к api) — баг старого docker-compose при «recreate». Снести контейнеры и поднять заново:
+
+```bash
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml down
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps -a
+```
+
+Проверка:
+
+```bash
+# 2. Логи API — нет ли падения при старте
 docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs --tail 100 api
 
 # 3. Слушает ли что-то на порту 8000
