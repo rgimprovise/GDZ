@@ -180,15 +180,32 @@ cd /opt/tutorbot/infra
 # 1. Все ли контейнеры запущены? (должны быть Up)
 docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps -a
 
-# 2. Логи API — нет ли падения при старте
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs api --tail 100
+# 2. Логи API — нет ли падения при старте (--tail перед именем сервиса)
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs --tail 100 api
 
 # 3. Слушает ли что-то на порту 8000
 ss -tlnp | grep 8000
 curl -s http://127.0.0.1:8000/health
 ```
 
-**Частые причины:** контейнер api не запущен или падает (смотрите `logs api`) — часто из‑за ошибки подключения к Postgres/Redis. Запускайте с `-f docker-compose.vps-ports.yml`. После исправления: `docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d`.
+Если **Postgres или Redis в Exit 128**, смотрите их логи:
+
+```bash
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs postgres
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs redis
+```
+
+Часто помогает: снести контейнеры и поднять заново (volumes сохраняются):
+
+```bash
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml down
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps -a
+```
+
+**Частые причины:**
+- **Postgres или Redis в Exit 128** — тогда api/worker не стартуют. Проверьте логи postgres и redis (команды ниже), затем перезапустите стек.
+- Запуск без override портов при занятых 5432/6379 — Postgres/Redis не поднимаются. Всегда используйте `-f docker-compose.vps-ports.yml` на этом VPS.
 
 ---
 
