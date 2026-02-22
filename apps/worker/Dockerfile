@@ -1,5 +1,5 @@
 FROM python:3.11-slim
-
+ENV PYTHONUNBUFFERED=1
 WORKDIR /app
 
 # Install system dependencies (Tesseract OCR для пайплайна: OCR → нормализация → сегментация)

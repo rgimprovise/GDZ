@@ -89,6 +89,7 @@ services:
     env_file:
       - .env
     environment:
+      - PYTHONUNBUFFERED=1
       - POSTGRES_HOST=postgres
       - REDIS_URL=redis://redis:6379/0
       - MINIO_ENDPOINT=minio:9000

@@ -342,7 +342,7 @@ $COMPOSE down && $COMPOSE up -d
 | **Состояние OCR в БД** | В debug-панели блок «Источники PDF»: статус источника станет **done** после успешного OCR или **failed** при ошибке; блок «Книги в базе» — колонка «Задач» станет > 0 после завершения пайплайна |
 | **Очередь Redis** | При необходимости: `docker exec -it tutorbot_redis redis-cli LLEN rq:queue:ingestion` — длина очереди; `KEYS rq:job:*` — задачи |
 
-Если в логах worker после строки `ingestion: ingestion.process_pdf_source(1)` долго нет новых строк — задача может ещё выполняться (OCR по многим страницам) или зависла/упала без вывода; тогда смотреть `logs --tail 500 worker` и при необходимости перезапустить worker и снова нажать «Начать OCR».
+Если после строки `ingestion: ingestion.process_pdf_source(1)` в логах нет вывода (нет «Processing PDF source», «OCR: Tesseract») — включён небуферизованный вывод: в контейнере worker задано `PYTHONUNBUFFERED=1`. После обновления и перезапуска worker логи должны появляться по мере выполнения. Если задача падает сразу — проверьте, что PDF доступен воркеру: `docker exec tutorbot_worker ls -la /app/data/pdfs/`.
 
 ---
 
