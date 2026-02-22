@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     # Redis
     redis_url: str = "redis://localhost:6379/0"
     
+    # Data directory (PDFs, OCR output) — для загрузки учебников и пути к файлам
+    data_dir: str = "data"
+    
     # MinIO
     minio_endpoint: str = "localhost:9000"
     minio_access_key: str = "minioadmin"

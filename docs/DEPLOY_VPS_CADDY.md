@@ -116,6 +116,10 @@ curl -s https://gdz.n8nrgimprovise.space/health   # через Caddy
 - **https://gdz.n8nrgimprovise.space/docs** — Swagger
 - **https://gdz.n8nrgimprovise.space/health** — проверка работы API
 
+В debug-панели доступны:
+- **Загрузить новый учебник** — загрузка PDF через веб; файл сохраняется в `data/pdfs/`, создаётся книга и источник PDF (по имени файла — предмет/класс).
+- **Источники PDF — начать OCR** — кнопка «Начать OCR» ставит в очередь пайплайн: EasyOCR + Tesseract → md/txt → нормализация (OpenAI) → распределение в БД (OpenAI). Worker должен быть запущен.
+
 ---
 
 ## 2. Обновление приложения на каждой итерации

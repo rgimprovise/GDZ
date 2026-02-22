@@ -6,20 +6,90 @@ Provides:
 - Search testing
 - Books/Problems viewer
 - Query debugger
+- Upload PDF, Start OCR
 """
+import re
+import unicodedata
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query as QueryParam, Form
+from fastapi import APIRouter, Depends, Query as QueryParam, Form, File, UploadFile
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from sqlalchemy.exc import ProgrammingError
 
 from database import get_db
-from models import Book, Query, User
+from models import Book, PdfSource, Query, User
+from config import get_settings
+from job_queue import enqueue_ingestion
 
 router = APIRouter(prefix="/debug", tags=["Debug"])
+settings = get_settings()
+
+# Ключевые слова для классификации по имени файла (без чтения PDF)
+SUBJECT_KEYWORDS = [
+    ("physics", ["физика", "физик"]),
+    ("chemistry", ["химия", "хими"]),
+    ("biology", ["биология", "биолог"]),
+    ("russian", ["русский язык", "русск. яз", "русск"]),
+    ("english", ["английский язык", "английск", "english", "англ яз"]),
+    ("history", ["история", "истори"]),
+    ("geography", ["география", "географ"]),
+    ("informatics", ["информатика", "информатик"]),
+    ("geometry", ["геометрия", "геометри"]),
+    ("math", ["математика", "алгебра", "матем", "алгебр"]),
+]
+
+
+def _normalize_unicode(t: str) -> str:
+    return unicodedata.normalize("NFC", t) if t else ""
+
+
+def classify_from_filename(filename: str) -> dict:
+    """Классификация по имени файла (без PyMuPDF)."""
+    low = _normalize_unicode(filename.lower())
+    out = {
+        "subject": "other",
+        "grade": None,
+        "authors": None,
+        "title": Path(filename).stem.replace("_", " ").replace("-", " "),
+        "publisher": None,
+        "part": None,
+        "is_gdz": False,
+    }
+    for subject, keywords in SUBJECT_KEYWORDS:
+        for kw in keywords:
+            if kw in low:
+                out["subject"] = subject
+                break
+        if out["subject"] != "other":
+            break
+    grade_m = re.search(r"(\d{1,2})\s*[-–]?\s*класс", low) or re.search(r"(\d{1,2})\s*класс", low)
+    if grade_m:
+        out["grade"] = grade_m.group(1)
+    part_m = re.search(r"часть\s*(\d+)", low)
+    if part_m:
+        out["part"] = part_m.group(1)
+    if any(x in low for x in ["гдз", "решебник", "ответы"]):
+        out["is_gdz"] = True
+    subject_names = {
+        "math": "Математика", "geometry": "Геометрия", "physics": "Физика",
+        "chemistry": "Химия", "biology": "Биология", "russian": "Русский язык",
+        "english": "Английский язык", "history": "История", "geography": "География",
+        "informatics": "Информатика",
+    }
+    if out["subject"] in subject_names:
+        parts = [subject_names[out["subject"]]]
+        if out["grade"]:
+            parts.append(f"{out['grade']} класс")
+        if out["authors"]:
+            parts.append(out["authors"])
+        if out["part"]:
+            parts.append(f"часть {out['part']}")
+        out["title"] = " ".join(parts)
+    return out
 
 
 # ===========================================
@@ -106,6 +176,59 @@ DASHBOARD_HTML = """
                 <span class="text-gray-500">Обработка...</span>
             </div>
             <div id="query-result"></div>
+        </div>
+
+        <!-- Upload PDF -->
+        <div class="bg-white rounded-lg shadow mb-8 p-6">
+            <h2 class="text-xl font-semibold mb-4">📤 Загрузить новый учебник</h2>
+            <form hx-post="/debug/api/upload-pdf" hx-target="#upload-result" hx-indicator="#upload-indicator"
+                  hx-encoding="multipart/form-data" class="space-y-4">
+                <div class="flex flex-wrap gap-4 items-end">
+                    <div>
+                        <label class="block text-sm text-gray-600 mb-1">PDF файл</label>
+                        <input type="file" name="file" accept=".pdf,.PDF" required
+                               class="px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-600 mb-1">Предмет (опционально)</label>
+                        <select name="subject" class="px-3 py-2 border rounded-lg">
+                            <option value="">по имени файла</option>
+                            <option value="math">Математика</option>
+                            <option value="geometry">Геометрия</option>
+                            <option value="physics">Физика</option>
+                            <option value="chemistry">Химия</option>
+                            <option value="russian">Русский язык</option>
+                            <option value="english">Английский язык</option>
+                            <option value="other">Другое</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-600 mb-1">Класс (опционально)</label>
+                        <input type="text" name="grade" placeholder="7" class="px-3 py-2 border rounded-lg w-20">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-600 mb-1">Название (опционально)</label>
+                        <input type="text" name="title" placeholder="по имени файла" class="px-3 py-2 border rounded-lg w-64">
+                    </div>
+                    <button type="submit" class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+                        Загрузить
+                    </button>
+                </div>
+                <div id="upload-indicator" class="htmx-indicator text-gray-500">Загрузка...</div>
+                <div id="upload-result"></div>
+            </form>
+        </div>
+
+        <!-- PDF sources: Start OCR -->
+        <div class="bg-white rounded-lg shadow mb-8 p-6">
+            <h2 class="text-xl font-semibold mb-4">📄 Источники PDF — начать OCR</h2>
+            <p class="text-sm text-gray-500 mb-4">Пайплайн: EasyOCR + Tesseract → md/txt → нормализация (OpenAI) → распределение в БД (OpenAI).</p>
+            <div id="pdf-sources-list" hx-get="/debug/api/pdf-sources" hx-trigger="load, refreshPdfSources from:body" hx-swap="innerHTML">
+                <div class="animate-pulse">
+                    <div class="h-10 bg-gray-200 rounded mb-2"></div>
+                    <div class="h-10 bg-gray-200 rounded mb-2"></div>
+                </div>
+            </div>
         </div>
 
         <!-- Books List -->
@@ -489,6 +612,140 @@ def books_options(db: Session = Depends(get_db)):
         return html
     except ProgrammingError:
         return ""
+
+
+@router.get("/api/pdf-sources", response_class=HTMLResponse)
+def list_pdf_sources(db: Session = Depends(get_db)):
+    """List PDF sources with book title, filename, status, and Start OCR button."""
+    try:
+        result = db.execute(text("""
+            SELECT ps.id, ps.original_filename, ps.minio_key, ps.status, ps.page_count,
+                   b.id as book_id, b.title as book_title
+            FROM pdf_sources ps
+            JOIN books b ON b.id = ps.book_id
+            ORDER BY ps.id DESC
+        """))
+        rows = list(result)
+    except ProgrammingError:
+        return "<p class='text-gray-500'>Таблицы не найдены. Выполните: <code>alembic upgrade head</code></p>"
+    if not rows:
+        return "<p class='text-gray-500'>Нет загруженных PDF. Загрузите учебник выше.</p>"
+    html = """
+    <table class="w-full text-sm">
+        <thead class="bg-gray-50">
+            <tr>
+                <th class="px-3 py-2 text-left">ID</th>
+                <th class="px-3 py-2 text-left">Книга</th>
+                <th class="px-3 py-2 text-left">Файл</th>
+                <th class="px-3 py-2 text-left">Статус</th>
+                <th class="px-3 py-2 text-right">Действие</th>
+            </tr>
+        </thead>
+        <tbody>
+    """
+    for row in rows:
+        status_cls = {"pending": "text-yellow-600", "ocr": "text-blue-600", "done": "text-green-600", "failed": "text-red-600"}.get(row.status, "text-gray-600")
+        can_start = row.status in ("pending", "failed")
+        btn = f"""<button type="button" hx-post="/debug/api/start-ocr/{row.id}" hx-target="#start-ocr-result-{row.id}" hx-swap="innerHTML" hx-indicator="#ocr-indicator-{row.id}"
+                class="px-3 py-1 bg-amber-500 text-white rounded text-xs hover:bg-amber-600">Начать OCR</button>
+                <span id="ocr-indicator-{row.id}" class="htmx-indicator ml-1">...</span>
+                <span id="start-ocr-result-{row.id}"></span>""" if can_start else f"<span class='text-gray-400'>—</span>"
+        html += f"""
+        <tr class="border-b hover:bg-gray-50">
+            <td class="px-3 py-2">{row.id}</td>
+            <td class="px-3 py-2">{row.book_title[:40] if row.book_title else '-'}</td>
+            <td class="px-3 py-2">{row.original_filename or row.minio_key or '-'}</td>
+            <td class="px-3 py-2 {status_cls}">{row.status}</td>
+            <td class="px-3 py-2 text-right">{btn}</td>
+        </tr>
+        """
+    html += "</tbody></table>"
+    return html
+
+
+@router.post("/api/upload-pdf", response_class=HTMLResponse)
+async def upload_pdf(
+    file: UploadFile = File(...),
+    subject: Optional[str] = Form(None),
+    grade: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Save uploaded PDF to data/pdfs, create Book and PdfSource, return success + refresh pdf-sources list."""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        return "<p class='text-red-500'>Выберите файл .pdf</p>"
+    safe_name = re.sub(r"[^\w\s\-\.]", "_", file.filename)[:200].strip() or "upload.pdf"
+    data_dir = Path(settings.data_dir)
+    pdfs_dir = data_dir / "pdfs"
+    pdfs_dir.mkdir(parents=True, exist_ok=True)
+    dest = pdfs_dir / safe_name
+    try:
+        content = await file.read()
+        dest.write_bytes(content)
+    except Exception as e:
+        return f"<p class='text-red-500'>Ошибка записи файла: {e}</p>"
+    minio_key = f"pdfs/{safe_name}"
+    try:
+        meta = classify_from_filename(file.filename)
+        if subject:
+            meta["subject"] = subject
+        if grade:
+            meta["grade"] = grade
+        if title:
+            meta["title"] = title
+        existing = db.query(Book).filter(
+            Book.subject == meta["subject"],
+            Book.grade == meta.get("grade"),
+            Book.authors == meta.get("authors"),
+            Book.part == meta.get("part"),
+        ).first()
+        if existing:
+            book = existing
+        else:
+            book = Book(
+                subject=meta["subject"],
+                grade=meta.get("grade"),
+                title=meta["title"],
+                authors=meta.get("authors"),
+                publisher=meta.get("publisher"),
+                part=meta.get("part"),
+                is_gdz=meta.get("is_gdz", False),
+            )
+            db.add(book)
+            db.commit()
+            db.refresh(book)
+        existing_ps = db.query(PdfSource).filter(PdfSource.minio_key == minio_key).first()
+        if existing_ps:
+            return f"<p class='text-amber-600'>Источник с таким файлом уже есть: id={existing_ps.id}</p>"
+        pdf_source = PdfSource(
+            book_id=book.id,
+            minio_key=minio_key,
+            original_filename=file.filename,
+            file_size_bytes=dest.stat().st_size,
+            page_count=None,
+            status="pending",
+        )
+        db.add(pdf_source)
+        db.commit()
+        db.refresh(pdf_source)
+    except Exception as e:
+        db.rollback()
+        return f"<p class='text-red-500'>Ошибка БД: {e}</p>"
+    msg = f"<p class='text-green-600'>Загружен: книга id={book.id}, источник PDF id={pdf_source.id}. Ниже нажмите «Начать OCR».</p>"
+    return HTMLResponse(content=msg, headers={"HX-Trigger": "refreshPdfSources"})
+
+
+@router.post("/api/start-ocr/{pdf_source_id}", response_class=HTMLResponse)
+def start_ocr(pdf_source_id: int, db: Session = Depends(get_db)):
+    """Put PDF ingestion job in queue (OCR → normalization → DB)."""
+    try:
+        ps = db.query(PdfSource).filter(PdfSource.id == pdf_source_id).first()
+        if not ps:
+            return "<span class='text-red-500'>Источник не найден</span>"
+        job_id = enqueue_ingestion(pdf_source_id)
+        return f"<span class='text-green-600'>В очереди (job {job_id[:8]}…)</span>"
+    except Exception as e:
+        return f"<span class='text-red-500'>{e}</span>"
 
 
 @router.get("/api/problems", response_class=HTMLResponse)
