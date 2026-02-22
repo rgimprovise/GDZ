@@ -50,6 +50,8 @@
 
 После ingestion у задач есть: `number`, `section` (часто ещё пустой), `problem_text`, `page_ref`. Ответов и решений пока нет.
 
+**LLM-нормализация (OpenAI):** результат записывается в **`data/ocr_normalized/{book_id}/{pdf_source_id}.md`** (постраничные блоки `## Страница N`). При сбое (OOM, kill) прогресс сохраняется в **`data/ocr_normalized/{book_id}/{pdf_source_id}.llm_checkpoint.json`**; повторный запуск «LLM нормализация» из интерфейса продолжит с места остановки без повторных вызовов API. Прогресс в реальном времени: логи воркера (`docker logs -f tutorbot_worker`) и опционально в интерфейсе (опрос Redis ключа `llm_norm_progress:{pdf_source_id}`).
+
 ---
 
 ## 3. Постобработка по книге (process_all)

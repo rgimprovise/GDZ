@@ -3,11 +3,14 @@
 и приведение формул к единому формату, пригодному для БД, чата и скриптов.
 
 Без шаблонных замен — модель исправляет по контексту (предмет, учебник).
+Поддержка чекпоинтов: при сбое можно продолжить с места остановки (без повторных вызовов API).
 """
 
+import json
 import os
 import re
-from typing import List, Optional
+from pathlib import Path
+from typing import Callable, List, Optional
 
 # Регулярка для разбора ответа по блокам ## Страница N
 PAGE_HEADER = re.compile(r"^##\s+Страница\s+(\d+)\s*$", re.IGNORECASE)
@@ -62,11 +65,43 @@ def _build_batch_chunk(page_texts: List[str], start_index: int) -> str:
     return "\n".join(lines).rstrip()
 
 
+def _load_checkpoint(path: Path, total_pages: int, page_texts: List[str]) -> tuple[List[str], set[int]]:
+    """Загрузить результат из чекпоинта; вернуть (result, done_indices)."""
+    result: List[str] = [""] * total_pages
+    done_indices: set[int] = set()
+    if not path.exists():
+        return result, done_indices
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        done_list = data.get("done", [])
+        done_indices = set(int(x) for x in done_list if 0 <= int(x) < total_pages)
+        for i in range(total_pages):
+            if str(i) in data and data[str(i)]:
+                result[i] = data[str(i)]
+            elif i not in done_indices:
+                result[i] = page_texts[i] if i < len(page_texts) else ""
+    except Exception:
+        return [page_texts[i] if i < len(page_texts) else "" for i in range(total_pages)], set()
+    for i in range(total_pages):
+        if not result[i]:
+            result[i] = page_texts[i] if i < len(page_texts) else ""
+    return result, done_indices
+
+
+def _save_checkpoint(path: Path, result: List[str], done_indices: set[int]) -> None:
+    """Сохранить чекпоинт (постранично) для продолжения после сбоя."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {"done": sorted(done_indices), **{str(i): result[i] for i in done_indices if i < len(result)}}
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=None), encoding="utf-8")
+
+
 def correct_normalized_pages(
     page_texts: List[str],
     subject: str = "geometry",
     batch_size: int = 10,
     model: Optional[str] = None,
+    checkpoint_path: Optional[Path] = None,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
 ) -> List[str]:
     """
     Прогнать нормализованный постраничный текст через OpenAI для исправления OCR и формул.
@@ -74,11 +109,16 @@ def correct_normalized_pages(
     Ограничения на символы в формулах заданы в SYSTEM_PROMPT (Unicode + ^, без LaTeX).
     При отсутствии API ключа или ошибке возвращается исходный список без изменений.
 
+    Чекпоинт: если передан checkpoint_path, после каждого батча прогресс сохраняется.
+    При повторном запуске с тем же путём уже обработанные страницы не отправляются в API снова.
+
     Args:
         page_texts: список текстов страниц (после ocr_cleaner).
         subject: предмет (geometry, math, physics, ...) для контекста.
         batch_size: сколько страниц отправлять в одном запросе.
         model: модель OpenAI (по умолчанию из env или gpt-4o).
+        checkpoint_path: путь к JSON-чекпоинту для продолжения после сбоя.
+        progress_callback: вызывается после каждого батча с (current, total).
 
     Returns:
         Список исправленных текстов той же длины.
@@ -97,17 +137,44 @@ def correct_normalized_pages(
 
     client = OpenAI(api_key=OPENAI_API_KEY)
     model_name = model or os.environ.get("OPENAI_MODEL_TEXT", OPENAI_MODEL)
-    result: List[str] = [""] * len(page_texts)  # заполним по индексам
-    total_batches = (len(page_texts) + batch_size - 1) // batch_size
+    total_pages = len(page_texts)
+    result: List[str] = _load_checkpoint(checkpoint_path, total_pages, page_texts) if checkpoint_path else [""] * total_pages
+    # Заполнить незачекпоинченные позиции исходным текстом для fallback
+    for i in range(total_pages):
+        if not result[i]:
+            result[i] = page_texts[i] if i < len(page_texts) else ""
+
+    resumed = sum(1 for i in range(total_pages) if result[i] and result[i] != (page_texts[i] if i < len(page_texts) else ""))
+    if checkpoint_path and checkpoint_path.exists() and resumed > 0:
+        print(f"   📂 Продолжение с чекпоинта: уже обработано ~{resumed} страниц")
+
+    total_batches = (total_pages + batch_size - 1) // batch_size
 
     for batch_idx in range(total_batches):
         start = batch_idx * batch_size
-        end = min(start + batch_size, len(page_texts))
+        end = min(start + batch_size, total_pages)
+        # Пропускаем батч, если все страницы уже есть в чекпоинте (по признаку «ответ не пустой и не равен исходнику»)
+        if checkpoint_path:
+            from llm_ocr_correct import _parse_pages_from_response
+            already_done = all(
+                result[i] and (result[i] != (page_texts[i] if i < len(page_texts) else ""))
+                for i in range(start, end)
+            )
+            if already_done:
+                if progress_callback:
+                    progress_callback(end, total_pages)
+                continue
+
         batch = page_texts[start:end]
         chunk = _build_batch_chunk(batch, start)
         if not chunk.strip():
             for i in range(start, end):
                 result[i] = page_texts[i]
+                done_indices.add(i)
+            if checkpoint_path:
+                _save_checkpoint(checkpoint_path, result, done_indices)
+            if progress_callback:
+                progress_callback(end, total_pages)
             continue
 
         user_content = f"Предмет: {subject}.\n\nИсходный текст (блоки страниц):\n\n{chunk}"
@@ -127,20 +194,32 @@ def correct_normalized_pages(
                 idx = page_num - 1
                 if 0 <= idx < len(result):
                     result[idx] = text
-            # Страницы, которых не оказалось в ответе, оставляем как были
             for i in range(start, end):
                 if not result[i] and i < len(page_texts):
                     result[i] = page_texts[i]
+            for i in range(start, end):
+                done_indices.add(i)
+            if checkpoint_path:
+                _save_checkpoint(checkpoint_path, result, done_indices)
         except Exception as e:
             print(f"   ⚠️  LLM-коррекция батча {batch_idx + 1}/{total_batches}: {e}")
             for i in range(start, end):
-                result[i] = page_texts[i]
+                result[i] = page_texts[i] if i < len(page_texts) else ""
+            if checkpoint_path:
+                _save_checkpoint(checkpoint_path, result, done_indices)
 
+        if progress_callback:
+            progress_callback(min(end, total_pages), total_pages)
         if (batch_idx + 1) % 5 == 0 or batch_idx == total_batches - 1:
-            print(f"   🤖 LLM-коррекция: {min(end, len(page_texts))}/{len(page_texts)} страниц")
+            print(f"   🤖 LLM-коррекция: {min(end, total_pages)}/{total_pages} страниц")
 
-    # Заполнить возможные пропуски
     for i in range(len(result)):
         if not result[i] and i < len(page_texts):
             result[i] = page_texts[i]
+
+    if checkpoint_path and checkpoint_path.exists():
+        try:
+            checkpoint_path.unlink()
+        except Exception:
+            pass
     return result

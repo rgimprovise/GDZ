@@ -54,7 +54,7 @@ except ImportError:
 
 # Файлы OCR: сырой и нормализованный .md по страницам
 try:
-    from ocr_files import write_raw_md, write_normalized_md, read_normalized_pages, get_ocr_normalized_path
+    from ocr_files import write_raw_md, write_normalized_md, read_normalized_pages, get_ocr_normalized_path, get_llm_checkpoint_path
     HAS_OCR_FILES = True
 except ImportError:
     HAS_OCR_FILES = False
@@ -536,17 +536,50 @@ def run_llm_normalize_only(pdf_source_id: int) -> dict:
         return {"status": "error", "message": "Нормализованный файл не найден. Сначала выполните OCR (Начать OCR)."}
 
     page_texts = [t for _, t in sorted(pages_data, key=lambda x: x[0])]
-    print(f"   📄 LLM-нормализация источника {pdf_source_id}: {len(page_texts)} страниц (без перезапуска OCR)")
+    total = len(page_texts)
+    print(f"   📄 LLM-нормализация источника {pdf_source_id}: {total} страниц (без перезапуска OCR)")
+
+    checkpoint_path = get_llm_checkpoint_path(book_id, pdf_source_id)
+    redis_conn = None
+    try:
+        from redis import Redis
+        redis_conn = Redis.from_url(settings.redis_url)
+    except Exception:
+        pass
+    progress_key = f"llm_norm_progress:{pdf_source_id}"
+
+    def progress_callback(current: int, total_pages: int) -> None:
+        if redis_conn:
+            try:
+                redis_conn.setex(progress_key, 3600, f"{current}/{total_pages}")
+            except Exception:
+                pass
 
     try:
         from llm_ocr_correct import correct_normalized_pages
-        corrected = correct_normalized_pages(page_texts, subject=subject)
+        if redis_conn:
+            try:
+                redis_conn.setex(progress_key, 3600, f"0/{total}")
+            except Exception:
+                pass
+        corrected = correct_normalized_pages(
+            page_texts,
+            subject=subject,
+            checkpoint_path=checkpoint_path,
+            progress_callback=progress_callback,
+        )
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
     write_normalized_md(book_id, pdf_source_id, corrected)
     print(f"   📁 Файл обновлён, переимпорт в БД...")
-    return import_from_normalized_file(pdf_source_id)
+    out = import_from_normalized_file(pdf_source_id)
+    if redis_conn:
+        try:
+            redis_conn.delete(progress_key)
+        except Exception:
+            pass
+    return out
 
 
 def import_from_normalized_file(pdf_source_id: int) -> dict:

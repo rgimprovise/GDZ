@@ -31,6 +31,12 @@ def get_ocr_normalized_path(book_id: int, pdf_source_id: int) -> Path:
     return base / "ocr_normalized" / str(book_id) / f"{pdf_source_id}.md"
 
 
+def get_llm_checkpoint_path(book_id: int, pdf_source_id: int) -> Path:
+    """Путь к чекпоинту LLM-нормализации (для продолжения после сбоя)."""
+    base = get_data_base()
+    return base / "ocr_normalized" / str(book_id) / f"{pdf_source_id}.llm_checkpoint.json"
+
+
 PAGE_HEADER = re.compile(r"^##\s+Страница\s+(\d+)\s*$", re.IGNORECASE)
 
 

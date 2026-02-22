@@ -223,6 +223,7 @@ DASHBOARD_HTML = """
         <div class="bg-white rounded-lg shadow mb-8 p-6">
             <h2 class="text-xl font-semibold mb-4">📄 Источники PDF — начать OCR</h2>
             <p class="text-sm text-gray-500 mb-4">Пайплайн: Tesseract → md/txt → нормализация (OpenAI) → распределение в БД (OpenAI).</p>
+            <p class="text-xs text-gray-400 mb-4">Результат LLM-нормализации записывается в <code>data/ocr_normalized/{book_id}/{pdf_source_id}.md</code>, затем импортируется в БД. При сбое прогресс сохраняется в чекпоинт — повторный запуск «LLM нормализация» продолжит с места остановки (без повторной оплаты API).</p>
             <div id="pdf-sources-list" hx-get="/debug/api/pdf-sources" hx-trigger="load, refreshPdfSources from:body" hx-swap="innerHTML">
                 <div class="animate-pulse">
                     <div class="h-10 bg-gray-200 rounded mb-2"></div>
@@ -653,7 +654,8 @@ def list_pdf_sources(db: Session = Depends(get_db)):
         llm_btn = f"""<button type="button" hx-post="/debug/api/run-llm-normalize/{row.id}" hx-target="#llm-result-{row.id}" hx-swap="innerHTML" hx-indicator="#llm-indicator-{row.id}"
                 class="px-3 py-1 bg-violet-500 text-white rounded text-xs hover:bg-violet-600 ml-1">LLM нормализация</button>
                 <span id="llm-indicator-{row.id}" class="htmx-indicator ml-1">...</span>
-                <span id="llm-result-{row.id}"></span>"""
+                <span id="llm-result-{row.id}"></span>
+                <span id="llm-progress-{row.id}" hx-get="/debug/api/llm-normalize-progress/{row.id}" hx-trigger="every 5s" hx-swap="innerHTML" class="ml-1"></span>"""
         btn = (start_ocr_btn + " " + llm_btn).strip() if (start_ocr_btn or llm_btn) else "<span class='text-gray-400'>—</span>"
         html += f"""
         <tr class="border-b hover:bg-gray-50">
@@ -778,6 +780,23 @@ def run_llm_normalize(pdf_source_id: int, db: Session = Depends(get_db)):
         return f"<span class='text-green-600'>В очереди (job {job_id[:8]}…)</span>"
     except Exception as e:
         return f"<span class='text-red-500'>{e}</span>"
+
+
+@router.get("/api/llm-normalize-progress/{pdf_source_id}", response_class=HTMLResponse)
+def llm_normalize_progress(pdf_source_id: int):
+    """Текущий прогресс LLM-нормализации по источнику (из Redis). Для опроса из UI."""
+    try:
+        from redis import Redis
+        r = Redis.from_url(settings.redis_url)
+        key = f"llm_norm_progress:{pdf_source_id}"
+        val = r.get(key)
+        r.close()
+        if val:
+            s = val.decode("utf-8") if isinstance(val, bytes) else str(val)
+            return f"<span class='text-violet-600 text-xs'>LLM: {s}</span>"
+    except Exception:
+        pass
+    return ""
 
 
 @router.get("/api/problems", response_class=HTMLResponse)
