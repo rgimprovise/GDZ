@@ -1,12 +1,12 @@
-# TutorBot API — фрагмент для Caddy (добавить в общий Caddyfile или включить через import).
-# Замените tutorbot.example.com на ваш домен/поддомен.
-# API слушает на localhost:8000 (Docker: порт 8000 проброшен на хост).
+# TutorBot API (GDZ) — фрагмент для Caddy.
+# Порт 8000 свободен (заняты: 5678, 8083, 3001, 3002, 3003).
+# Добавить в общий Caddyfile и: sudo systemctl reload caddy
 
-tutorbot.example.com {
+gdz.n8nrgimprovise.space {
+    encode gzip
     reverse_proxy localhost:8000
 }
 
-# После добавления: sudo systemctl reload caddy
-# Debug-панель: https://tutorbot.example.com/debug
-# Swagger:     https://tutorbot.example.com/docs
-# Health:      https://tutorbot.example.com/health
+# Debug-панель: https://gdz.n8nrgimprovise.space/debug
+# Swagger:     https://gdz.n8nrgimprovise.space/docs
+# Health:      https://gdz.n8nrgimprovise.space/health

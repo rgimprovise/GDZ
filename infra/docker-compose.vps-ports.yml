@@ -1,0 +1,12 @@
+# Переопределение портов на VPS, если 5432 и 6379 уже заняты (системный Postgres/Redis и т.п.).
+# Запуск: docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d --build
+# Внутри сети контейнеры по-прежнему обращаются к postgres:5432 и redis:6379.
+
+services:
+  postgres:
+    ports:
+      - "5433:5432"
+
+  redis:
+    ports:
+      - "6380:6379"

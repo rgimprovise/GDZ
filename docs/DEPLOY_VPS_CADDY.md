@@ -8,16 +8,22 @@
 
 ### 1.1 Клонирование и окружение
 
+На VPS обычно проще клонировать по **HTTPS** (не нужен SSH-ключ для GitHub):
+
 ```bash
-# На VPS (под вашим пользователем или в /opt)
-cd /opt   # или ваш каталог для приложений
-git clone https://github.com/YOUR_USER/GDZ.git tutorbot
+# На VPS (root или ваш пользователь)
+cd /opt
+git clone https://github.com/rgimprovise/GDZ.git tutorbot
 cd tutorbot/infra
 cp env.example .env
 nano .env   # POSTGRES_PASSWORD, BASE_URL (https://ваш-домен-для-tutorbot), TELEGRAM_*, OPENAI_* и т.д.
 ```
 
-**BASE_URL** укажите тот, по которому будет доступен API (например `https://tutorbot.yourdomain.com`).
+Если репозиторий **приватный**, после `git clone` по HTTPS при первом `git pull` Git запросит логин и пароль — укажите ваш GitHub **логин** и **Personal Access Token** (не пароль от аккаунта). Создать токен: GitHub → Settings → Developer settings → Personal access tokens.
+
+Клонирование по SSH (`git@github.com:rgimprovise/GDZ.git`) возможно только если на VPS добавлен SSH-ключ в GitHub (Settings → SSH and GPG keys или Deploy key у репозитория).
+
+**BASE_URL** укажите тот, по которому будет доступен API. Для текущего деплоя: `https://gdz.n8nrgimprovise.space`.
 
 ### 1.2 Данные (PDF)
 
@@ -34,33 +40,23 @@ API в Docker слушает порт **8000** на хосте. Нужно пр�
 
 **Вариант A:** отдельный файл конфига Caddy (рекомендуется)
 
-Создайте файл (путь может отличаться в зависимости от вашей установки Caddy):
-
-```bash
-sudo nano /etc/caddy/conf.d/tutorbot.conf
-```
-
-Содержимое (подставьте свой домен):
-
-```
-tutorbot.yourdomain.com {
-    reverse_proxy localhost:8000
-}
-```
-
-Или если Caddy читает один Caddyfile:
+Добавьте блок в ваш основной Caddyfile (рядом с остальными сайтами):
 
 ```bash
 sudo nano /etc/caddy/Caddyfile
 ```
 
-Добавьте блок (можно в конец):
+Вставьте блок (порт 8000 свободен; заняты у вас: 5678, 8083, 3001, 3002, 3003):
 
 ```
-tutorbot.yourdomain.com {
+# TutorBot GDZ API
+gdz.n8nrgimprovise.space {
+    encode gzip
     reverse_proxy localhost:8000
 }
 ```
+
+Либо используйте готовый сниппет из репозитория: `cat /opt/tutorbot/infra/Caddyfile.snippet`.
 
 Перезагрузите Caddy:
 
@@ -78,30 +74,50 @@ cat infra/Caddyfile.snippet
 
 ### 1.4 Запуск приложения
 
+**Если Docker Compose не установлен**, установите один из вариантов:
+
+```bash
+# Вариант 1: плагин Docker Compose v2 (рекомендуется, команда: docker compose)
+sudo apt update
+sudo apt install -y docker-compose-plugin
+
+# Вариант 2: старый бинарник (команда: docker-compose)
+# sudo apt install -y docker-compose
+```
+
+Проверка: `docker compose version` или `docker-compose version`.
+
+**Если порты 5432 или 6379 на VPS уже заняты** (системный Postgres/Redis и т.п.), используйте файл с другими портами:
+
 ```bash
 cd /opt/tutorbot/infra
-docker compose up -d --build
-docker compose exec api alembic upgrade head
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d --build
+docker-compose exec api alembic upgrade head
+```
+
+Файл `docker-compose.vps-ports.yml` пробрасывает Postgres на **5433**, Redis на **6380** (внутри сети контейнеры по-прежнему используют 5432 и 6379).
+
+Если 5432 и 6379 свободны, можно без override:
+
+```bash
+docker-compose up -d --build
+docker-compose exec api alembic upgrade head
 ```
 
 Проверка:
 
 ```bash
 curl -s http://localhost:8000/health
-curl -s https://tutorbot.yourdomain.com/health   # через Caddy
+curl -s https://gdz.n8nrgimprovise.space/health   # через Caddy
 ```
 
 ### 1.5 Debug-интерфейс
 
 После настройки Caddy debug-панель доступна по адресу:
 
-- **https://ваш-домен-для-tutorbot/debug**
-
-Например: `https://tutorbot.yourdomain.com/debug`
-
-Там же:
-- **/docs** — Swagger
-- **/health** — проверка работы API
+- **https://gdz.n8nrgimprovise.space/debug**
+- **https://gdz.n8nrgimprovise.space/docs** — Swagger
+- **https://gdz.n8nrgimprovise.space/health** — проверка работы API
 
 ---
 
@@ -123,21 +139,21 @@ git push origin main
 
 ### 2.2 На VPS: подтянуть код и перезапустить
 
-Выполнять **на VPS** по SSH:
+Выполнять **на VPS** по SSH. Если у вас `docker-compose` (через дефис), замените `docker compose` на `docker-compose`:
 
 ```bash
 cd /opt/tutorbot
 git pull origin main
 cd infra
-docker compose build --no-cache
-docker compose up -d
-docker compose exec api alembic upgrade head
+docker-compose build --no-cache
+docker-compose up -d
+docker-compose exec api alembic upgrade head
 ```
 
-Кратко в одну строку (подставьте ветку при необходимости):
+Кратко в одну строку:
 
 ```bash
-cd /opt/tutorbot && git pull origin main && cd infra && docker compose build --no-cache && docker compose up -d && docker compose exec api alembic upgrade head
+cd /opt/tutorbot && git pull origin main && cd infra && docker-compose build --no-cache && docker-compose up -d && docker-compose exec api alembic upgrade head
 ```
 
 ### 2.3 Скрипт обновления на VPS (опционально)
@@ -180,5 +196,5 @@ docker compose up -d
 | Действие              | Где      | Команда |
 |-----------------------|----------|---------|
 | Пуш изменений         | Локально | `git add -A && git commit -m "..." && git push origin main` |
-| Обновить на VPS       | VPS      | `cd /opt/tutorbot && git pull && cd infra && docker compose build --no-cache && docker compose up -d && docker compose exec api alembic upgrade head` |
-| Открыть debug-панель | Браузер  | **https://ваш-домен-для-tutorbot/debug** |
+| Обновить на VPS       | VPS      | `cd /opt/tutorbot && git pull && cd infra && docker-compose build --no-cache && docker-compose up -d && docker-compose exec api alembic upgrade head` |
+| Открыть debug-панель | Браузер  | **https://gdz.n8nrgimprovise.space/debug** |

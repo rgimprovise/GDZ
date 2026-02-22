@@ -13,9 +13,9 @@ if [ -z "$SKIP_PULL" ]; then
   git pull origin "$BRANCH"
 fi
 
-echo "🔨 docker compose build & up (infra)"
+echo "🔨 docker-compose build & up (infra)"
 cd "$REPO_ROOT/infra"
-docker compose build --no-cache
-docker compose up -d
-docker compose exec -T api alembic upgrade head 2>/dev/null || true
-echo "✅ Update done. Debug: https://YOUR_DOMAIN/debug"
+docker-compose build --no-cache
+docker-compose up -d
+docker-compose exec -T api alembic upgrade head 2>/dev/null || true
+echo "✅ Update done. Debug: https://gdz.n8nrgimprovise.space/debug"
