@@ -203,6 +203,14 @@ docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d
 docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps -a
 ```
 
+Если логи postgres/redis **пустые** и контейнеры снова Exit 128 — часто виноваты **права на volume**. Тогда снести и контейнеры, и volumes (БД будет пустая) и поднять заново:
+
+```bash
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml down -v
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d
+# затем: docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml exec api alembic upgrade head
+```
+
 **Частые причины:**
 - **Postgres или Redis в Exit 128** — тогда api/worker не стартуют. Проверьте логи postgres и redis (команды ниже), затем перезапустите стек.
 - Запуск без override портов при занятых 5432/6379 — Postgres/Redis не поднимаются. Всегда используйте `-f docker-compose.vps-ports.yml` на этом VPS.
