@@ -171,6 +171,8 @@ cd /opt/tutorbot && ./scripts/update_on_vps.sh
 
 Опционально: `SKIP_PULL=1 ./scripts/update_on_vps.sh` — не делать `git pull` (например, уже подтянули вручную). `BRANCH=develop` — другая ветка.
 
+Если при pull появляется «Your local changes would be overwritten», скрипт сам сбросит изменения в **отслеживаемых** файлах (`git checkout -- .`) и повторит pull. Неотслеживаемые файлы (например `.env`) не трогаются. Если на VPS вы вручную правили код и хотите сохранить правки — перед запуском скрипта сделайте `git stash`.
+
 ---
 
 ## 3. Ошибка 502 (Bad Gateway)

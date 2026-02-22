@@ -19,7 +19,11 @@ COMPOSE_OPTS="-f docker-compose.yml"
 
 echo "📥 git pull origin $BRANCH"
 if [ -z "$SKIP_PULL" ]; then
-  git pull origin "$BRANCH"
+  if ! git pull origin "$BRANCH"; then
+    echo "   Локальные изменения мешают pull. Сбрасываю отслеживаемые файлы и повторяю..."
+    git checkout -- .
+    git pull origin "$BRANCH"
+  fi
 else
   echo "   (SKIP_PULL=1, пропуск)"
 fi
