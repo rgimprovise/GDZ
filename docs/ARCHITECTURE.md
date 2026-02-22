@@ -132,7 +132,7 @@ GDZ/
 |------|------------|
 | `worker.py` | Точка входа RQ Worker, подключение к Redis, прослушивание очередей `ingestion` и `queries` |
 | `jobs.py` | `process_query(query_id)`: поиск задач (retrieval), форматирование ответа, вызов LLM для объяснения, сохранение Response, уведомление в Telegram |
-| `ingestion.py` | `process_pdf_source(pdf_source_id)`: OCR (EasyOCR/Tesseract) по страницам → запись raw в `data/ocr_raw/`, нормализация → `data/ocr_normalized/`, импорт в `pdf_pages` + сегментация задач + извлечение теории в `section_theory`. Функции: `segment_problems`, `extract_and_save_section_theory`, `reanalyze_pdf_source`, `import_from_normalized_file`, `enqueue_ingestion`, `enqueue_reanalyze`, `enqueue_import_from_normalized_file` |
+| `ingestion.py` | `process_pdf_source(pdf_source_id)`: OCR (Tesseract) по страницам → запись raw в `data/ocr_raw/`, нормализация → `data/ocr_normalized/`, импорт в `pdf_pages` + сегментация задач + извлечение теории в `section_theory`. Функции: `segment_problems`, `extract_and_save_section_theory`, `reanalyze_pdf_source`, `import_from_normalized_file`, `enqueue_ingestion`, `enqueue_reanalyze`, `enqueue_import_from_normalized_file` |
 | `ocr_files.py` | Пути и работа с файлами: `data/ocr_raw/{book_id}/{source_id}_{model}.md`, `data/ocr_normalized/{book_id}/{source_id}.md`; функции записи/парсинга по блокам «## Страница N» |
 | `ocr_cleaner.py` | `clean_ocr_text(text)` — нормализация артефактов OCR (латиница/кириллица, переносы и т.д.) |
 | `retrieval.py` | `search_problems(query_text, ...)` — полнотекстовый поиск по `problems`, извлечение номера части из запроса, подсчёт score, возврат SearchResult |
@@ -143,7 +143,7 @@ GDZ/
 | `notifications.py` | Отправка сообщений в Telegram (уведомление о готовности ответа) |
 | `formula_processor.py` | Постобработка формул в тексте (опционально, используется скриптами) |
 
-**Зависимости:** sqlalchemy, psycopg2-binary, redis, rq, minio, pymupdf, easyocr, pytesseract, Pillow, openai, requests, httpx, pydantic-settings, python-dotenv. В контейнере дополнительно: tesseract-ocr, tesseract-ocr-rus, tesseract-ocr-eng.
+**Зависимости:** sqlalchemy, psycopg2-binary, redis, rq, minio, pymupdf, pytesseract, Pillow, openai, requests, httpx, pydantic-settings, python-dotenv. В контейнере дополнительно: tesseract-ocr, tesseract-ocr-rus, tesseract-ocr-eng.
 
 ---
 
@@ -179,7 +179,7 @@ PDF в data/pdfs/ + запись в pdf_sources (seed_books)
     → Очередь "ingestion" (enqueue_ingestion(pdf_source_id))
     → Worker: process_pdf_source(pdf_source_id)
         → Открытие PDF (PyMuPDF), рендер страниц (150 DPI)
-        → OCR по каждой странице (EasyOCR, fallback Tesseract) → список raw текстов
+        → OCR по каждой странице (Tesseract) → список raw текстов
         → Запись в data/ocr_raw/{book_id}/{source_id}_{model}.md
         → Нормализация по страницам (clean_ocr_text) → data/ocr_normalized/{book_id}/{source_id}.md
         → Удаление старых pdf_pages и problems по этому источнику
@@ -249,7 +249,7 @@ PDF в data/pdfs/ + запись в pdf_sources (seed_books)
 | Приложение | Ключевые библиотеки |
 |------------|----------------------|
 | **API** | fastapi, uvicorn, sqlalchemy, psycopg2-binary, alembic, redis, rq, minio, pydantic, pydantic-settings, python-dotenv, httpx |
-| **Worker** | sqlalchemy, psycopg2-binary, redis, rq, minio, pymupdf, easyocr, pytesseract, Pillow, openai, requests, httpx, pydantic-settings, python-dotenv |
+| **Worker** | sqlalchemy, psycopg2-binary, redis, rq, minio, pymupdf, pytesseract, Pillow, openai, requests, httpx, pydantic-settings, python-dotenv |
 | **Bot** | python-telegram-bot, redis, pydantic-settings, python-dotenv |
 
 ### 7.2 Внешние сервисы

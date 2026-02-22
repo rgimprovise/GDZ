@@ -12,9 +12,9 @@ minio==7.2.3
 # PDF (ingestion)
 pymupdf>=1.24.0
 
-# OCR (приоритет: EasyOCR для макс. точности, fallback: Tesseract)
-easyocr>=1.7.0
+# OCR (Tesseract)
 pytesseract>=0.3.10
+Pillow>=10.0.0
 Pillow>=10.0.0
 
 # Utilities

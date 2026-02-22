@@ -2,7 +2,7 @@
 PDF Ingestion Pipeline
 
 Пайплайн: OCR → сырой текст в файлы → нормализация → нормализованный файл → импорт в БД.
-1. OCR (EasyOCR / Tesseract) по всем страницам → запись в data/ocr_raw/{book_id}/{source_id}_{model}.md
+1. OCR (Tesseract) по всем страницам → запись в data/ocr_raw/{book_id}/{source_id}_{model}.md
 2. Нормализация (ocr_cleaner) по страницам → запись в data/ocr_normalized/{book_id}/{source_id}.md
 3. Импорт в БД: только нормализованный текст в pdf_pages.ocr_text, сегментация задач и теории.
 
@@ -27,14 +27,7 @@ except ImportError:
     HAS_PYMUPDF = False
     print("⚠️  pymupdf not installed")
 
-# OCR: EasyOCR (приоритет, выше точность) и Tesseract (fallback)
-try:
-    import easyocr
-    HAS_EASYOCR = True
-except ImportError:
-    HAS_EASYOCR = False
-    print("⚠️  easyocr not installed")
-
+# OCR: Tesseract only
 try:
     import pytesseract
     from PIL import Image
@@ -42,15 +35,6 @@ try:
 except ImportError:
     HAS_TESSERACT = False
     print("⚠️  pytesseract/Pillow not installed")
-
-# Ленивая инициализация EasyOCR Reader (тяжёлая загрузка моделей)
-_easyocr_reader = None
-
-def _get_easyocr_reader():
-    global _easyocr_reader
-    if _easyocr_reader is None and HAS_EASYOCR:
-        _easyocr_reader = easyocr.Reader(["ru", "en"], gpu=False, verbose=False)
-    return _easyocr_reader
 
 from config import get_settings
 from database import SessionLocal
@@ -156,16 +140,13 @@ def process_pdf_source(pdf_source_id: int, local_pdf_path: Optional[str] = None)
         db.commit()
         book_id = pdf_source.book_id
         
-        # —— 1. OCR по всем страницам, сырой текст в память и в файл ——
+        # —— 1. OCR по всем страницам (Tesseract), сырой текст в память и в файл ——
         raw_texts = []
         ocr_confidences = []
         model_used = "tesseract"
         raw_path = norm_path = None
-        reader = _get_easyocr_reader()
-        if reader is not None:
-            print(f"   📷 OCR: EasyOCR (ru+en)")
-        elif HAS_TESSERACT:
-            print(f"   📷 OCR: Tesseract (ru+en)")
+        if HAS_TESSERACT:
+            print(f"   📷 OCR: Tesseract (rus+eng)")
         
         for page_num in range(page_count):
             page = doc[page_num]
@@ -173,24 +154,10 @@ def process_pdf_source(pdf_source_id: int, local_pdf_path: Optional[str] = None)
             img_data = pix.tobytes("png")
             img = Image.open(io.BytesIO(img_data))
             text = ""
-            conf = 0
-            if reader is not None:
-                try:
-                    import numpy as np
-                    arr = np.array(img)
-                    parts = reader.readtext(arr, detail=0)
-                    text = "\n".join(p for p in parts if p and isinstance(p, str)).strip()
-                    conf = 80 if text else 0
-                    if conf:
-                        model_used = "easyocr"
-                except Exception as e:
-                    if page_num == 0:
-                        print(f"   ⚠️  EasyOCR failed (fallback to Tesseract): {e}")
-                    text = ""
-            if not text and HAS_TESSERACT:
+            conf = 70
+            if HAS_TESSERACT:
                 try:
                     text = pytesseract.image_to_string(img, lang="rus+eng")
-                    conf = 70
                 except Exception as e:
                     if page_num == 0:
                         print(f"   ⚠️  OCR failed for page {page_num}: {e}")

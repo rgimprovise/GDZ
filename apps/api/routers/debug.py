@@ -222,7 +222,7 @@ DASHBOARD_HTML = """
         <!-- PDF sources: Start OCR -->
         <div class="bg-white rounded-lg shadow mb-8 p-6">
             <h2 class="text-xl font-semibold mb-4">📄 Источники PDF — начать OCR</h2>
-            <p class="text-sm text-gray-500 mb-4">Пайплайн: EasyOCR + Tesseract → md/txt → нормализация (OpenAI) → распределение в БД (OpenAI).</p>
+            <p class="text-sm text-gray-500 mb-4">Пайплайн: Tesseract → md/txt → нормализация (OpenAI) → распределение в БД (OpenAI).</p>
             <div id="pdf-sources-list" hx-get="/debug/api/pdf-sources" hx-trigger="load, refreshPdfSources from:body" hx-swap="innerHTML">
                 <div class="animate-pulse">
                     <div class="h-10 bg-gray-200 rounded mb-2"></div>

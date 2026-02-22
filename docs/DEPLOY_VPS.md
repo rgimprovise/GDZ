@@ -7,7 +7,7 @@
 ## 1. Требования к VPS
 
 - **ОС:** Ubuntu 22.04 / 24.04 или Debian 12 (рекомендуется).
-- **Ресурсы:** минимум 2 GB RAM, 2 CPU; для OCR (EasyOCR/Tesseract) и нескольких воркеров — 4 GB RAM и больше.
+- **Ресурсы:** минимум 2 GB RAM, 2 CPU; для OCR (Tesseract) и нескольких воркеров — 4 GB RAM и больше.
 - **Диск:** 20+ GB (БД, PDF, `data/ocr_raw`, `data/ocr_normalized`, образы Docker).
 - **Сеть:** открыть порты 80, 443 (если ставите nginx + SSL) и по желанию 22 для SSH.
 
@@ -292,8 +292,7 @@ docker compose exec api alembic upgrade head
 
 ### 9.2 Ресурсы VPS для OCR
 
-- Для **EasyOCR** на CPU: желательно **4 GB RAM** и больше; для книг по 300–400 страниц — 4–8 GB.
-- Если памяти мало — можно временно переключить воркер на **только Tesseract** (легче по памяти): в коде или через env отключить EasyOCR и использовать только Tesseract (см. `ingestion.py`).
+- OCR выполняется **Tesseract** (легче по памяти, чем прежний EasyOCR).
 
 ---
 

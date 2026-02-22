@@ -118,7 +118,7 @@ curl -s https://gdz.n8nrgimprovise.space/health   # через Caddy
 
 В debug-панели доступны:
 - **Загрузить новый учебник** — загрузка PDF через веб; файл сохраняется в `data/pdfs/`, создаётся книга и источник PDF (по имени файла — предмет/класс). Если при загрузке появляется ошибка «relation "books" does not exist» — сначала примените миграции (команда ниже).
-- **Источники PDF — начать OCR** — кнопка «Начать OCR» ставит в очередь пайплайн: EasyOCR + Tesseract → md/txt → нормализация (OpenAI) → распределение в БД (OpenAI). Worker должен быть запущен.
+- **Источники PDF — начать OCR** — кнопка «Начать OCR» ставит в очередь пайплайн: Tesseract → md/txt → нормализация (OpenAI) → распределение в БД (OpenAI). Worker должен быть запущен.
 
 **После первого подъёма или после `down -v` обязательно выполните миграции:**
 ```bash
@@ -307,7 +307,7 @@ cd /opt/tutorbot/infra
 COMPOSE="docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml"
 ```
 
-**Логи OCR (worker)** — пайплайн EasyOCR → Tesseract → нормализация → БД выполняется в контейнере `worker`:
+**Логи OCR (worker)** — пайплайн Tesseract → нормализация → БД выполняется в контейнере `worker`:
 
 ```bash
 # Последние 200 строк (по ним видно прогресс и ошибки)
@@ -316,8 +316,6 @@ $COMPOSE logs --tail 200 worker
 # Следить в реальном времени (удобно после нажатия «Начать OCR»)
 $COMPOSE logs -f worker
 ```
-
-Если в логах долго висит «Downloading detection model» / «Downloading recognition model» — это **нормально**: EasyOCR при первом запуске скачивает модели (~100+ МБ). Дождитесь окончания или прервите и после следующего `./scripts/update_on_vps.sh` модели будут уже в образе (предзагрузка при сборке).
 
 **Логи API, статус, перезапуск:**
 

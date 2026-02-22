@@ -18,8 +18,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Предзагрузка моделей EasyOCR (иначе первый OCR на VPS ждёт 5–15 мин загрузки)
-RUN python -c "import easyocr; easyocr.Reader(['ru','en'], gpu=False, verbose=False)"
-
 # Run the worker
 CMD ["python", "-m", "worker"]
