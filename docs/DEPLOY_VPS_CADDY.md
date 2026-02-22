@@ -304,17 +304,25 @@ docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs --tail
 
 ```bash
 cd /opt/tutorbot/infra
+COMPOSE="docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml"
+```
 
-# Логи (с override портов)
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs -f api
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs -f worker
+**Логи OCR (worker)** — пайплайн EasyOCR → Tesseract → нормализация → БД выполняется в контейнере `worker`:
 
-# Статус
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps
+```bash
+# Последние 200 строк (по ним видно прогресс и ошибки)
+$COMPOSE logs --tail 200 worker
 
-# Остановить / запустить снова
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml down
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d
+# Следить в реальном времени (удобно после нажатия «Начать OCR»)
+$COMPOSE logs -f worker
+```
+
+**Логи API, статус, перезапуск:**
+
+```bash
+$COMPOSE logs -f api
+$COMPOSE ps
+$COMPOSE down && $COMPOSE up -d
 ```
 
 ---
