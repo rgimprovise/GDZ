@@ -164,12 +164,12 @@ cd /opt/tutorbot && ./scripts/update_on_vps.sh
 - выполняет `git pull origin main`;
 - подставляет `docker-compose.vps-ports.yml` (порты 5433/6380), если файл есть;
 - останавливает контейнеры (`down` **без** `-v` — данные и volumes не удаляются);
-- собирает образы и запускает контейнеры (`build --no-cache` и `up -d`);
+- собирает образы и запускает контейнеры (`build` с кэшем и `up -d`; при изменении только кода переустановка пакетов не выполняется);
 - применяет миграции БД (`alembic upgrade head`).
 
 Такой порядок (сначала `down`, затем `up -d`) избегает ошибки `KeyError: 'ContainerConfig'` у старого docker-compose при пересоздании контейнеров.
 
-Опционально: `SKIP_PULL=1 ./scripts/update_on_vps.sh` — не делать `git pull` (например, уже подтянули вручную). `BRANCH=develop` — другая ветка.
+Опционально: `SKIP_PULL=1 ./scripts/update_on_vps.sh` — не делать `git pull` (например, уже подтянули вручную). `BRANCH=develop` — другая ветка. Если меняли `requirements.txt` или Dockerfile и нужна полная пересборка без кэша — вручную: `cd infra && docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml build --no-cache`.
 
 Если при pull появляется «Your local changes would be overwritten», скрипт сам сбросит изменения в **отслеживаемых** файлах (`git checkout -- .`) и повторит pull. Неотслеживаемые файлы (например `.env`) не трогаются. Если на VPS вы вручную правили код и хотите сохранить правки — перед запуском скрипта сделайте `git stash`.
 

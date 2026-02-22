@@ -32,8 +32,8 @@ echo "🔨 Остановка контейнеров (volumes и данные с
 cd "$INFRA"
 docker-compose $COMPOSE_OPTS down
 
-echo "🔨 Сборка и запуск контейнеров"
-docker-compose $COMPOSE_OPTS build --no-cache
+echo "🔨 Сборка и запуск контейнеров (кэш Docker используется — пересборка только при изменении Dockerfile/requirements)"
+docker-compose $COMPOSE_OPTS build
 docker-compose $COMPOSE_OPTS up -d
 
 echo "📋 Применение миграций БД (alembic upgrade head)"
