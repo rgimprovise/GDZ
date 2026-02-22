@@ -170,23 +170,43 @@ chmod +x scripts/update_on_vps.sh
 
 ---
 
-## 3. Полезные команды на VPS
+## 3. Ошибка 502 (Bad Gateway)
+
+Если страница не открывается с кодом 502, Caddy не может достучаться до API на localhost:8000. Проверьте **на VPS**:
 
 ```bash
 cd /opt/tutorbot/infra
 
-# Логи
-docker compose logs -f api
-docker compose logs -f worker
+# 1. Все ли контейнеры запущены? (должны быть Up)
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps -a
+
+# 2. Логи API — нет ли падения при старте
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs api --tail 100
+
+# 3. Слушает ли что-то на порту 8000
+ss -tlnp | grep 8000
+curl -s http://127.0.0.1:8000/health
+```
+
+**Частые причины:** контейнер api не запущен или падает (смотрите `logs api`) — часто из‑за ошибки подключения к Postgres/Redis. Запускайте с `-f docker-compose.vps-ports.yml`. После исправления: `docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d`.
+
+---
+
+## 4. Полезные команды на VPS
+
+```bash
+cd /opt/tutorbot/infra
+
+# Логи (с override портов)
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs -f api
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs -f worker
 
 # Статус
-docker compose ps
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps
 
-# Остановить
-docker compose down
-
-# Запустить снова
-docker compose up -d
+# Остановить / запустить снова
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml down
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d
 ```
 
 ---
