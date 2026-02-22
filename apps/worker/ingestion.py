@@ -686,7 +686,7 @@ def import_from_normalized_file_llm(pdf_source_id: int) -> dict:
     Читает нормализованный .md → препроцессинг блоков → LLM батчами → полная перезапись
     данных по этому источнику: pdf_pages, problems, section_theory (по книге).
     """
-    from models import PdfSource, PdfPage, Problem, SectionTheory
+    from models import PdfSource, PdfPage, Problem, ProblemPart, SectionTheory
 
     if not HAS_OCR_FILES:
         return {"status": "error", "message": "ocr_files module not available"}
@@ -763,7 +763,7 @@ def import_from_normalized_file_llm(pdf_source_id: int) -> dict:
                 continue
             db.add(SectionTheory(book_id=book_id, section=section_label, theory_text=theory_text, page_ref=None))
 
-        # Задачи из блоков type=problem
+        # Задачи из блоков type=problem (с подпунктами parts при наличии)
         problems_found = 0
         for b in parsed:
             if (b.get("type") or "").lower() != "problem":
@@ -778,7 +778,9 @@ def import_from_normalized_file_llm(pdf_source_id: int) -> dict:
             sec = (b.get("section") or "").strip() or None
             if sec and not sec.startswith("§"):
                 sec = f"§{sec.lstrip()}"
-            db.add(Problem(
+            parts_raw = b.get("parts")
+            has_parts = isinstance(parts_raw, list) and len(parts_raw) > 0
+            problem = Problem(
                 book_id=book_id,
                 source_page_id=source_page_id,
                 number=b.get("number"),
@@ -788,7 +790,25 @@ def import_from_normalized_file_llm(pdf_source_id: int) -> dict:
                 answer_text=(b.get("answer_text") or "").strip() or None,
                 page_ref=f"стр. {page_num_1}" if page_num_1 else None,
                 confidence=70,
-            ))
+                has_parts=has_parts,
+            )
+            db.add(problem)
+            db.flush()
+            if has_parts:
+                for part in parts_raw:
+                    if not isinstance(part, dict):
+                        continue
+                    part_number = (part.get("part_number") or "").strip() or None
+                    part_text = (part.get("part_text") or "").strip() or None
+                    if part_number is None and part_text is None:
+                        continue
+                    db.add(ProblemPart(
+                        problem_id=problem.id,
+                        part_number=part_number or "?",
+                        part_text=part_text,
+                        answer_text=(part.get("answer_text") or "").strip() or None,
+                        solution_text=(part.get("solution_text") or "").strip() or None,
+                    ))
             problems_found += 1
 
         pdf_source.status = "done"
