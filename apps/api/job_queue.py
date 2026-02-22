@@ -75,4 +75,5 @@ def enqueue_import_from_normalized(pdf_source_id: int) -> str:
         job_timeout="30m",
         result_ttl=3600,
     )
+    redis_conn.setex(f"import_db_job_id:{pdf_source_id}", 3600, job.id)
     return job.id

@@ -660,6 +660,8 @@ def list_pdf_sources(db: Session = Depends(get_db)):
                 <span id="llm-progress-{row.id}" hx-get="/debug/api/llm-normalize-progress/{row.id}" hx-trigger="every 5s" hx-swap="innerHTML" class="ml-1"></span>"""
         import_db_btn = f"""<button type="button" hx-post="/debug/api/run-import-db/{row.id}" hx-target="#import-db-result-{row.id}" hx-swap="innerHTML" hx-indicator="#import-db-indicator-{row.id}"
                 class="px-3 py-1 bg-emerald-500 text-white rounded text-xs hover:bg-emerald-600 ml-1">Распределение в БД</button>
+                <button type="button" hx-post="/debug/api/cancel-import-db/{row.id}" hx-target="#import-db-result-{row.id}" hx-swap="innerHTML"
+                class="px-3 py-1 bg-gray-400 text-white rounded text-xs hover:bg-gray-500 ml-1">Остановить</button>
                 <span id="import-db-indicator-{row.id}" class="htmx-indicator ml-1">...</span>
                 <span id="import-db-result-{row.id}"></span>"""
         btn = (start_ocr_btn + " " + llm_btn + " " + import_db_btn).strip() if (start_ocr_btn or llm_btn or import_db_btn) else "<span class='text-gray-400'>—</span>"
@@ -824,6 +826,33 @@ def run_import_db(pdf_source_id: int, db: Session = Depends(get_db)):
             return "<span class='text-red-500'>Источник не найден</span>"
         job_id = enqueue_import_from_normalized(pdf_source_id)
         return f"<span class='text-green-600'>В очереди (job {job_id[:8]}…)</span>"
+    except Exception as e:
+        return f"<span class='text-red-500'>{e}</span>"
+
+
+@router.post("/api/cancel-import-db/{pdf_source_id}", response_class=HTMLResponse)
+def cancel_import_db(pdf_source_id: int):
+    """Остановить распределение по БД: снять с очереди или запросить остановку выполняющейся задачи."""
+    try:
+        from redis import Redis
+        from rq import Job
+        r = Redis.from_url(settings.redis_url)
+        key = f"import_db_job_id:{pdf_source_id}"
+        job_id = r.get(key)
+        if not job_id:
+            return "<span class='text-gray-500'>Нет запущенной задачи распределения по БД</span>"
+        job_id = job_id.decode("utf-8") if isinstance(job_id, bytes) else job_id
+        job = Job.fetch(job_id, connection=r)
+        status = job.get_status()
+        if status == "queued":
+            job.cancel()
+            r.delete(key)
+            return "<span class='text-green-600'>Задача снята с очереди</span>"
+        if status == "started":
+            r.setex(f"cancel_import_db:{pdf_source_id}", 300, "1")
+            return "<span class='text-amber-600'>Запрошена остановка (текущий батч доработает)</span>"
+        r.delete(key)
+        return "<span class='text-gray-500'>Задача уже завершена</span>"
     except Exception as e:
         return f"<span class='text-red-500'>{e}</span>"
 

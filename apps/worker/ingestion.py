@@ -712,8 +712,30 @@ def import_from_normalized_file_llm(pdf_source_id: int) -> dict:
         def progress(batch_idx: int, total: int) -> None:
             print(f"   📦 Распределение LLM: батч {batch_idx}/{total}")
 
-        from llm_distribute import distribute_batches
-        parsed = distribute_batches(pages_data, subject, progress_callback=progress)
+        redis_conn = None
+        try:
+            from redis import Redis
+            redis_conn = Redis.from_url(settings.redis_url)
+        except Exception:
+            pass
+        cancel_key = f"cancel_import_db:{pdf_source_id}"
+
+        def cancel_check() -> bool:
+            if not redis_conn:
+                return False
+            try:
+                if redis_conn.get(cancel_key):
+                    redis_conn.delete(cancel_key)
+                    return True
+            except Exception:
+                pass
+            return False
+
+        from llm_distribute import distribute_batches, ImportDBCancelRequested
+        try:
+            parsed = distribute_batches(pages_data, subject, progress_callback=progress, cancel_check=cancel_check)
+        except ImportDBCancelRequested:
+            return {"status": "cancelled", "message": "Распределение по БД остановлено пользователем."}
         if not parsed:
             return {"status": "error", "message": "LLM не вернул блоки (проверь OPENAI_API_KEY и формат ответа)"}
 
@@ -763,10 +785,21 @@ def import_from_normalized_file_llm(pdf_source_id: int) -> dict:
                 continue
             db.add(SectionTheory(book_id=book_id, section=section_label, theory_text=theory_text, page_ref=None))
 
-        # Задачи из блоков type=problem (с подпунктами parts при наличии)
+        # Задачи из блоков type=problem; type=solution_only прикрепляется к последней задаче
         problems_found = 0
+        last_added_problem = None
         for b in parsed:
-            if (b.get("type") or "").lower() != "problem":
+            t = (b.get("type") or "").lower()
+            if t == "solution_only":
+                sol = (b.get("solution_text") or "").strip()
+                ans = (b.get("answer_text") or "").strip()
+                if last_added_problem and (sol or ans):
+                    if sol:
+                        last_added_problem.solution_text = sol if not last_added_problem.solution_text else (last_added_problem.solution_text + "\n\n" + sol)
+                    if ans and not last_added_problem.answer_text:
+                        last_added_problem.answer_text = ans
+                continue
+            if t != "problem":
                 continue
             problem_text = (b.get("problem_text") or "").strip()
             if not problem_text:
@@ -794,6 +827,7 @@ def import_from_normalized_file_llm(pdf_source_id: int) -> dict:
             )
             db.add(problem)
             db.flush()
+            last_added_problem = problem
             if has_parts:
                 for part in parts_raw:
                     if not isinstance(part, dict):
@@ -810,6 +844,24 @@ def import_from_normalized_file_llm(pdf_source_id: int) -> dict:
                         solution_text=(part.get("solution_text") or "").strip() or None,
                     ))
             problems_found += 1
+
+        # Блок ответов в конце книги: сопоставляем по номеру задачи и пишем answer_text в БД
+        for b in parsed:
+            if (b.get("type") or "").lower() != "answers_block":
+                continue
+            answers_list = b.get("answers")
+            if not isinstance(answers_list, list):
+                continue
+            for item in answers_list:
+                if not isinstance(item, dict):
+                    continue
+                num = (item.get("number") or "").strip() or None
+                ans = (item.get("answer_text") or "").strip() or None
+                if not num or not ans:
+                    continue
+                prob = db.query(Problem).filter(Problem.book_id == book_id, Problem.number == num).first()
+                if prob and not prob.answer_text:
+                    prob.answer_text = ans
 
         pdf_source.status = "done"
         db.commit()
