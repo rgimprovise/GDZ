@@ -247,9 +247,9 @@ DASHBOARD_HTML = """
         <div class="bg-white rounded-lg shadow mb-8 p-6">
             <h2 class="text-xl font-semibold mb-4">📋 Просмотр задач</h2>
             <div class="flex gap-2 mb-4">
-                <select id="book-select" class="px-4 py-2 border rounded-lg"
+                <select id="book-select" name="book_id" class="px-4 py-2 border rounded-lg"
                         hx-get="/debug/api/problems" hx-target="#problems-list" 
-                        hx-trigger="change" hx-include="this">
+                        hx-trigger="change" hx-include="#book-select, select[name='problem_type']">
                     <option value="">Выберите книгу...</option>
                 </select>
                 <select name="problem_type" class="px-4 py-2 border rounded-lg"
@@ -262,6 +262,64 @@ DASHBOARD_HTML = """
                 </select>
             </div>
             <div id="problems-list"></div>
+        </div>
+
+        <!-- DB Debug Window -->
+        <div class="bg-white rounded-lg shadow mb-8 p-6">
+            <h2 class="text-xl font-semibold mb-4">🔧 Окно отладки по БД</h2>
+            <p class="text-sm text-gray-500 mb-4">Просмотр того, что реально записано в БД: теория по параграфам, задачи/вопросы/ответы. Фильтры по книге, типу, параграфу, странице.</p>
+            <div class="flex flex-wrap gap-4 mb-4 items-end">
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">Книга</label>
+                    <select id="db-debug-book" name="book_id" class="px-3 py-2 border rounded-lg"
+                            hx-get="/debug/api/db-preview" hx-target="#db-preview-result" hx-trigger="change"
+                            hx-include="#db-debug-book, #db-debug-content, #db-debug-ptype, #db-debug-section, #db-debug-page, #db-debug-with-answer">
+                        <option value="">Выберите книгу...</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">Что смотреть</label>
+                    <select id="db-debug-content" name="content" class="px-3 py-2 border rounded-lg"
+                            hx-get="/debug/api/db-preview" hx-target="#db-preview-result" hx-trigger="change"
+                            hx-include="#db-debug-book, #db-debug-content, #db-debug-ptype, #db-debug-section, #db-debug-page, #db-debug-with-answer">
+                        <option value="all">Теория и задачи</option>
+                        <option value="theory">Только теория (параграфы)</option>
+                        <option value="problems">Только задачи</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">Тип задачи</label>
+                    <select id="db-debug-ptype" name="problem_type" class="px-3 py-2 border rounded-lg"
+                            hx-get="/debug/api/db-preview" hx-target="#db-preview-result" hx-trigger="change"
+                            hx-include="#db-debug-book, #db-debug-content, #db-debug-ptype, #db-debug-section, #db-debug-page, #db-debug-with-answer">
+                        <option value="">Все</option>
+                        <option value="question">Вопрос</option>
+                        <option value="exercise">Упражнение</option>
+                        <option value="unknown">Неизвестный</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">Параграф (§)</label>
+                    <input type="text" id="db-debug-section" name="section" placeholder="§12 или 12" class="px-3 py-2 border rounded-lg w-24"
+                           hx-get="/debug/api/db-preview" hx-target="#db-preview-result" hx-trigger="keyup changed delay:300ms"
+                           hx-include="#db-debug-book, #db-debug-content, #db-debug-ptype, #db-debug-section, #db-debug-page, #db-debug-with-answer">
+                </div>
+                <div>
+                    <label class="block text-xs text-gray-500 mb-1">Страница</label>
+                    <input type="number" id="db-debug-page" name="page" placeholder="—" min="0" class="px-3 py-2 border rounded-lg w-20"
+                           hx-get="/debug/api/db-preview" hx-target="#db-preview-result" hx-trigger="change"
+                           hx-include="#db-debug-book, #db-debug-content, #db-debug-ptype, #db-debug-section, #db-debug-page, #db-debug-with-answer">
+                </div>
+                <div class="flex items-center gap-2">
+                    <input type="checkbox" id="db-debug-with-answer" name="with_answer" value="1" class="rounded"
+                           hx-get="/debug/api/db-preview" hx-target="#db-preview-result" hx-trigger="change"
+                           hx-include="#db-debug-book, #db-debug-content, #db-debug-ptype, #db-debug-section, #db-debug-page, #db-debug-with-answer">
+                    <label for="db-debug-with-answer" class="text-sm text-gray-600">Только с ответом</label>
+                </div>
+            </div>
+            <div id="db-preview-result" class="min-h-[120px] rounded border border-gray-200 bg-gray-50 p-4">
+                <p class="text-gray-500 text-sm">Выберите книгу</p>
+            </div>
         </div>
 
         <!-- Recent Queries -->
@@ -277,11 +335,14 @@ DASHBOARD_HTML = """
     </div>
 
     <script>
-        // Load book options for select
+        // Load book options for both selects
         fetch('/debug/api/books-options')
             .then(r => r.text())
             .then(html => {
-                document.getElementById('book-select').innerHTML = '<option value="">Выберите книгу...</option>' + html;
+                const opt = '<option value="">Выберите книгу...</option>' + html;
+                document.getElementById('book-select').innerHTML = opt;
+                const dbBook = document.getElementById('db-debug-book');
+                if (dbBook) dbBook.innerHTML = opt;
             });
     </script>
 </body>
@@ -903,7 +964,7 @@ def list_problems(
         query += " AND p.problem_type = :ptype"
         params["ptype"] = problem_type
     
-    query += " ORDER BY p.section, p.number::int NULLS LAST LIMIT :limit"
+    query += " ORDER BY p.section, p.number LIMIT :limit"
     
     result = db.execute(text(query), params)
     rows = list(result)
@@ -939,6 +1000,99 @@ def list_problems(
         """
     
     return html
+
+
+@router.get("/api/db-preview", response_class=HTMLResponse)
+def db_preview(
+    book_id: Optional[int] = None,
+    content: str = "all",
+    problem_type: Optional[str] = None,
+    section: Optional[str] = None,
+    page: Optional[int] = None,
+    with_answer: Optional[str] = None,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    """Окно отладки по БД: теория и/или задачи по фильтрам."""
+    if not book_id:
+        return "<p class='text-gray-500'>Выберите книгу</p>"
+    parts: list[str] = []
+    # Теория по параграфам
+    if content in ("all", "theory"):
+        q_theory = "SELECT id, section, page_ref, LEFT(theory_text, 500) as theory_text FROM section_theory WHERE book_id = :book_id"
+        params: dict = {"book_id": book_id, "limit": limit}
+        if section and section.strip():
+            params["section_pattern"] = f"%{section.strip()}%" if "%" not in section else section.strip()
+            q_theory += " AND section ILIKE :section_pattern"
+        q_theory += " ORDER BY section LIMIT :limit"
+        try:
+            rows = list(db.execute(text(q_theory), params))
+        except Exception:
+            rows = []
+        if rows:
+            parts.append("<div class='mb-4'><h3 class='font-semibold text-gray-700 mb-2'>Теория (параграфы)</h3>")
+            for r in rows:
+                ref = f" <span class='text-gray-400 text-xs'>{r.page_ref or ''}</span>" if r.page_ref else ""
+                parts.append(
+                    f"<div class='border-l-2 border-amber-400 pl-3 py-2 mb-2 bg-amber-50/50 rounded-r'><span class='font-medium'>{r.section}</span>{ref}<pre class='text-sm text-gray-700 mt-1 whitespace-pre-wrap'>{_h(r.theory_text or '')}...</pre></div>"
+                )
+            parts.append("</div>")
+        elif content == "theory":
+            parts.append("<p class='text-gray-500'>Теория не найдена</p>")
+    # Задачи
+    if content in ("all", "problems"):
+        q_prob = """
+            SELECT p.id, p.number, p.section, p.problem_type,
+                   LEFT(p.problem_text, 300) as problem_text,
+                   LEFT(p.answer_text, 150) as answer_text,
+                   p.solution_text IS NOT NULL as has_solution,
+                   pp.page_num
+            FROM problems p
+            LEFT JOIN pdf_pages pp ON p.source_page_id = pp.id
+            WHERE p.book_id = :book_id
+        """
+        params = {"book_id": book_id, "limit": limit}
+        if problem_type:
+            q_prob += " AND p.problem_type = :ptype"
+            params["ptype"] = problem_type
+        if section and section.strip():
+            params["section_pattern"] = f"%{section.strip()}%" if "%" not in section else section.strip()
+            q_prob += " AND p.section ILIKE :section_pattern"
+        if page is not None:
+            pnum = page - 1 if page >= 1 else page
+            q_prob += " AND pp.page_num = :pnum"
+            params["pnum"] = pnum
+        if with_answer == "1":
+            q_prob += " AND p.answer_text IS NOT NULL"
+        q_prob += " ORDER BY p.section, p.number LIMIT :limit"
+        try:
+            rows = list(db.execute(text(q_prob), params))
+        except Exception:
+            rows = []
+        if rows:
+            parts.append("<div><h3 class='font-semibold text-gray-700 mb-2'>Задачи</h3>")
+            for r in rows:
+                type_cls = {"question": "border-l-blue-400", "exercise": "border-l-green-400"}.get(r.problem_type or "unknown", "border-l-gray-300")
+                pg = f" <span class='text-gray-400 text-xs'>стр.{r.page_num + 1 if r.page_num is not None else '?'}</span>" if r.page_num is not None else ""
+                ans = ""
+                if r.answer_text:
+                    ans = f"<div class='text-xs text-green-700 mt-1'>Ответ: {_h(r.answer_text)}</div>"
+                elif getattr(r, "has_solution", False):
+                    ans = "<span class='text-xs bg-blue-100 px-1 rounded'>решение</span>"
+                parts.append(
+                    f"<div class='border-l-4 {type_cls} pl-3 py-2 mb-2 bg-white rounded-r'><span class='font-semibold'>№{r.number or '?'}</span> <span class='text-gray-500 text-sm'>{r.section or ''}</span>{pg}<div class='text-sm text-gray-700 mt-1'>{_h(r.problem_text or '')}...</div>{ans}</div>"
+                )
+            parts.append("</div>")
+        elif content == "problems":
+            parts.append("<p class='text-gray-500'>Задачи не найдены</p>")
+    if not parts:
+        return "<p class='text-gray-500'>Нет данных по выбранным фильтрам</p>"
+    return "\n".join(parts)
+
+
+def _h(s: str) -> str:
+    """Escape HTML for preview."""
+    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 @router.get("/api/queries", response_class=HTMLResponse)
