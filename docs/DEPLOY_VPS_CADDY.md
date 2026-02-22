@@ -307,6 +307,8 @@ cd /opt/tutorbot/infra
 COMPOSE="docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml"
 ```
 
+**Важно:** все команды с `docker-compose` (логи, ps, exec и т.д.) нужно выполнять из каталога **infra** — иначе будет ошибка `No such file or directory: './docker-compose.yml'`.
+
 **Логи OCR (worker)** — пайплайн Tesseract → нормализация → БД выполняется в контейнере `worker`:
 
 ```bash
