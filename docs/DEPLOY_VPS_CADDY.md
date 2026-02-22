@@ -317,6 +317,8 @@ $COMPOSE logs --tail 200 worker
 $COMPOSE logs -f worker
 ```
 
+Если в логах долго висит «Downloading detection model» / «Downloading recognition model» — это **нормально**: EasyOCR при первом запуске скачивает модели (~100+ МБ). Дождитесь окончания или прервите и после следующего `./scripts/update_on_vps.sh` модели будут уже в образе (предзагрузка при сборке).
+
 **Логи API, статус, перезапуск:**
 
 ```bash
