@@ -730,6 +730,11 @@ async def upload_pdf(
         db.refresh(pdf_source)
     except Exception as e:
         db.rollback()
+        err = str(e)
+        if "does not exist" in err or "relation" in err.lower():
+            return """<p class='text-red-500'>Таблицы БД не созданы. На VPS выполните миграции:</p>
+<pre class='mt-2 p-3 bg-gray-100 rounded text-sm'>docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml exec api alembic upgrade head</pre>
+<p class='text-gray-600 mt-2'>После этого снова загрузите файл.</p>"""
         return f"<p class='text-red-500'>Ошибка БД: {e}</p>"
     msg = f"<p class='text-green-600'>Загружен: книга id={book.id}, источник PDF id={pdf_source.id}. Ниже нажмите «Начать OCR».</p>"
     return HTMLResponse(content=msg, headers={"HX-Trigger": "refreshPdfSources"})

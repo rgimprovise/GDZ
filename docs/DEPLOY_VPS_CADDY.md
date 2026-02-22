@@ -117,8 +117,14 @@ curl -s https://gdz.n8nrgimprovise.space/health   # через Caddy
 - **https://gdz.n8nrgimprovise.space/health** — проверка работы API
 
 В debug-панели доступны:
-- **Загрузить новый учебник** — загрузка PDF через веб; файл сохраняется в `data/pdfs/`, создаётся книга и источник PDF (по имени файла — предмет/класс).
+- **Загрузить новый учебник** — загрузка PDF через веб; файл сохраняется в `data/pdfs/`, создаётся книга и источник PDF (по имени файла — предмет/класс). Если при загрузке появляется ошибка «relation "books" does not exist» — сначала примените миграции (команда ниже).
 - **Источники PDF — начать OCR** — кнопка «Начать OCR» ставит в очередь пайплайн: EasyOCR + Tesseract → md/txt → нормализация (OpenAI) → распределение в БД (OpenAI). Worker должен быть запущен.
+
+**После первого подъёма или после `down -v` обязательно выполните миграции:**
+```bash
+cd /opt/tutorbot/infra
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml exec api alembic upgrade head
+```
 
 ---
 
@@ -138,36 +144,29 @@ git push origin main
 
 (Вместо `main` подставьте вашу ветку, если другая.)
 
-### 2.2 На VPS: подтянуть код и перезапустить
+### 2.2 На VPS: одна команда для обновления
 
-Выполнять **на VPS** по SSH. Если у вас `docker-compose` (через дефис), замените `docker compose` на `docker-compose`:
+После пуша изменений на GitHub на VPS достаточно **одной команды**. Данные (БД, загруженные PDF, OCR-файлы) **не удаляются** — скрипт только подтягивает код, пересобирает образы, поднимает контейнеры и применяет миграции.
 
-```bash
-cd /opt/tutorbot
-git pull origin main
-cd infra
-docker-compose build --no-cache
-docker-compose up -d
-docker-compose exec api alembic upgrade head
-```
-
-Кратко в одну строку:
+**Один раз** сделайте скрипт исполняемым (если ещё не делали):
 
 ```bash
-cd /opt/tutorbot && git pull origin main && cd infra && docker-compose build --no-cache && docker-compose up -d && docker-compose exec api alembic upgrade head
+chmod +x /opt/tutorbot/scripts/update_on_vps.sh
 ```
 
-### 2.3 Скрипт обновления на VPS (опционально)
-
-В репозитории есть скрипт `scripts/update_on_vps.sh`. На VPS один раз сделайте его исполняемым и запускайте при обновлении:
+**При каждом обновлении** (после `git push` с локальной машины):
 
 ```bash
-cd /opt/tutorbot
-chmod +x scripts/update_on_vps.sh
-./scripts/update_on_vps.sh
+cd /opt/tutorbot && ./scripts/update_on_vps.sh
 ```
 
-(Скрипт делает `git pull` и `docker compose build && up` в каталоге `infra`.)
+Скрипт сам:
+- выполняет `git pull origin main`;
+- подставляет `docker-compose.vps-ports.yml` (порты 5433/6380), если файл есть;
+- собирает образы и запускает контейнеры (`build --no-cache` и `up -d`);
+- применяет миграции БД (`alembic upgrade head`).
+
+Опционально: `SKIP_PULL=1 ./scripts/update_on_vps.sh` — не делать `git pull` (например, уже подтянули вручную). `BRANCH=develop` — другая ветка.
 
 ---
 
@@ -320,5 +319,5 @@ docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d
 | Действие              | Где      | Команда |
 |-----------------------|----------|---------|
 | Пуш изменений         | Локально | `git add -A && git commit -m "..." && git push origin main` |
-| Обновить на VPS       | VPS      | `cd /opt/tutorbot && git pull && cd infra && docker-compose build --no-cache && docker-compose up -d && docker-compose exec api alembic upgrade head` |
+| Обновить на VPS       | VPS      | `cd /opt/tutorbot && ./scripts/update_on_vps.sh` |
 | Открыть debug-панель | Браузер  | **https://gdz.n8nrgimprovise.space/debug** |
