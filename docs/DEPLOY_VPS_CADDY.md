@@ -87,22 +87,19 @@ sudo apt install -y docker-compose-plugin
 
 Проверка: `docker compose version` или `docker-compose version`.
 
-**Если порты 5432 или 6379 на VPS уже заняты** (системный Postgres/Redis и т.п.), используйте файл с другими портами:
+**Если порты 5432 или 6379 на VPS уже заняты** (системный Postgres/Redis и т.п.), используйте файл с другими портами. **Важно:** сначала остановите и удалите контейнеры, затем подтяните код и поднимите стек заново — иначе старые контейнеры остаются с привязкой к 5432/6379:
 
 ```bash
 cd /opt/tutorbot/infra
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml down
+cd /opt/tutorbot && git pull && cd infra
 docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d --build
-docker-compose exec api alembic upgrade head
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml exec api alembic upgrade head
 ```
 
-Файл `docker-compose.vps-ports.yml` пробрасывает Postgres на **5433**, Redis на **6380** (внутри сети контейнеры по-прежнему используют 5432 и 6379).
+Файл `docker-compose.vps-ports.yml` пробрасывает Postgres на **5433**, Redis на **6380** (внутри сети контейнеры по-прежнему используют 5432 и 6379). На VPS используйте только `-f docker-compose.vps-ports.yml` (файла с портами 5432/6379 в репозитории нет).
 
-Если 5432 и 6379 свободны, можно без override:
-
-```bash
-docker-compose up -d --build
-docker-compose exec api alembic upgrade head
-```
+Локально (если 5432/6379 свободны): `docker-compose -f docker-compose.yml -f docker-compose.local-ports.yml up -d --build`
 
 Проверка:
 
@@ -232,7 +229,7 @@ docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps -a
 
 **Частые причины:**
 - **Postgres или Redis в Exit 128** — тогда api/worker не стартуют. Проверьте логи postgres и redis (команды ниже), затем перезапустите стек.
-- Запуск без override портов при занятых 5432/6379 — Postgres/Redis не поднимаются. Всегда используйте `-f docker-compose.vps-ports.yml` на этом VPS.
+- **"address already in use" для 5432/6379** — порты задаются только в `docker-compose.vps-ports.yml` (5433, 6380). Сначала выполните `down`, затем `git pull`, затем `up -d` — иначе старые контейнеры продолжают использовать 5432/6379.
 
 ---
 

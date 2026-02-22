@@ -10,8 +10,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-tutorbot}
       POSTGRES_USER: ${POSTGRES_USER:-tutorbot}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tutorbot}
-    ports:
-      - "5432:5432"
+    # Порты задаются в docker-compose.local-ports.yml (локально) или docker-compose.vps-ports.yml (VPS)
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -24,8 +23,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: tutorbot_redis
-    ports:
-      - "6379:6379"
+    # Порты задаются в docker-compose.local-ports.yml (локально) или docker-compose.vps-ports.yml (VPS)
     volumes:
       - redisdata:/data
     healthcheck:
