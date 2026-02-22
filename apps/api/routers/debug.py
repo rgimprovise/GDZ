@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Query as QueryParam, Form
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
+from sqlalchemy.exc import ProgrammingError
 
 from database import get_db
 from models import Book, Query, User
@@ -174,36 +175,9 @@ def debug_dashboard():
 # API Endpoints for Dashboard
 # ===========================================
 
-@router.get("/api/stats", response_class=HTMLResponse)
-def get_stats(db: Session = Depends(get_db)):
-    """Get statistics as HTML cards."""
-    # Count books
-    books_count = db.execute(text("SELECT COUNT(*) FROM books")).scalar() or 0
-    
-    # Count problems by type
-    problems_result = db.execute(text("""
-        SELECT 
-            COUNT(*) as total,
-            COUNT(*) FILTER (WHERE problem_type = 'question') as questions,
-            COUNT(*) FILTER (WHERE problem_type = 'exercise') as exercises,
-            COUNT(*) FILTER (WHERE answer_text IS NOT NULL) as with_answer,
-            COUNT(*) FILTER (WHERE solution_text IS NOT NULL) as with_solution
-        FROM problems
-    """)).first()
-    
-    total = problems_result.total if problems_result else 0
-    questions = problems_result.questions if problems_result else 0
-    exercises = problems_result.exercises if problems_result else 0
-    with_answer = problems_result.with_answer if problems_result else 0
-    with_solution = problems_result.with_solution if problems_result else 0
-    
-    # Count pages
-    pages_count = db.execute(text("SELECT COUNT(*) FROM pdf_pages")).scalar() or 0
-    
-    # Count queries
-    queries_count = db.execute(text("SELECT COUNT(*) FROM queries")).scalar() or 0
-    
-    html = f"""
+def _stats_html(books_count: int, total: int, questions: int, exercises: int,
+                with_answer: int, with_solution: int, pages_count: int, queries_count: int) -> str:
+    return f"""
     <div class="bg-white p-4 rounded-lg shadow">
         <div class="text-3xl font-bold text-blue-600">{books_count}</div>
         <div class="text-gray-600">Книг</div>
@@ -230,7 +204,32 @@ def get_stats(db: Session = Depends(get_db)):
         </div>
     </div>
     """
-    return html
+
+
+@router.get("/api/stats", response_class=HTMLResponse)
+def get_stats(db: Session = Depends(get_db)):
+    """Get statistics as HTML cards. Returns zeros if tables are missing (run alembic upgrade head)."""
+    try:
+        books_count = db.execute(text("SELECT COUNT(*) FROM books")).scalar() or 0
+        problems_result = db.execute(text("""
+            SELECT 
+                COUNT(*) as total,
+                COUNT(*) FILTER (WHERE problem_type = 'question') as questions,
+                COUNT(*) FILTER (WHERE problem_type = 'exercise') as exercises,
+                COUNT(*) FILTER (WHERE answer_text IS NOT NULL) as with_answer,
+                COUNT(*) FILTER (WHERE solution_text IS NOT NULL) as with_solution
+            FROM problems
+        """)).first()
+        total = problems_result.total if problems_result else 0
+        questions = problems_result.questions if problems_result else 0
+        exercises = problems_result.exercises if problems_result else 0
+        with_answer = problems_result.with_answer if problems_result else 0
+        with_solution = problems_result.with_solution if problems_result else 0
+        pages_count = db.execute(text("SELECT COUNT(*) FROM pdf_pages")).scalar() or 0
+        queries_count = db.execute(text("SELECT COUNT(*) FROM queries")).scalar() or 0
+    except ProgrammingError:
+        books_count = total = questions = exercises = with_answer = with_solution = pages_count = queries_count = 0
+    return _stats_html(books_count, total, questions, exercises, with_answer, with_solution, pages_count, queries_count)
 
 
 @router.get("/api/search", response_class=HTMLResponse)
@@ -424,23 +423,25 @@ def get_query_result(query_id: int, db: Session = Depends(get_db)):
 
 @router.get("/api/books", response_class=HTMLResponse)
 def list_books(db: Session = Depends(get_db)):
-    """List all books as HTML table."""
-    result = db.execute(text("""
-        SELECT 
-            b.id,
-            b.subject,
-            b.grade,
-            b.title,
-            b.authors,
-            b.is_gdz,
-            (SELECT COUNT(*) FROM problems WHERE book_id = b.id) as problem_count,
-            (SELECT COUNT(*) FROM problems WHERE book_id = b.id AND answer_text IS NOT NULL) as with_answer,
-            (SELECT COUNT(*) FROM pdf_sources WHERE book_id = b.id) as pdf_count
-        FROM books b
-        ORDER BY b.id
-    """))
-    
-    rows = list(result)
+    """List all books as HTML table. Returns message if tables missing (run alembic upgrade head)."""
+    try:
+        result = db.execute(text("""
+            SELECT 
+                b.id,
+                b.subject,
+                b.grade,
+                b.title,
+                b.authors,
+                b.is_gdz,
+                (SELECT COUNT(*) FROM problems WHERE book_id = b.id) as problem_count,
+                (SELECT COUNT(*) FROM problems WHERE book_id = b.id AND answer_text IS NOT NULL) as with_answer,
+                (SELECT COUNT(*) FROM pdf_sources WHERE book_id = b.id) as pdf_count
+            FROM books b
+            ORDER BY b.id
+        """))
+        rows = list(result)
+    except ProgrammingError:
+        return "<p class='text-gray-500'>Таблицы не найдены. Выполните: <code>alembic upgrade head</code></p>"
     
     if not rows:
         return "<p class='text-gray-500'>Книги не найдены. Запустите скрипт seed_books.py</p>"
@@ -480,13 +481,14 @@ def list_books(db: Session = Depends(get_db)):
 @router.get("/api/books-options", response_class=HTMLResponse)
 def books_options(db: Session = Depends(get_db)):
     """Get books as HTML options for select."""
-    result = db.execute(text("SELECT id, title FROM books ORDER BY id"))
-    
-    html = ""
-    for row in result:
-        html += f'<option value="{row.id}">{row.title[:40]}</option>'
-    
-    return html
+    try:
+        result = db.execute(text("SELECT id, title FROM books ORDER BY id"))
+        html = ""
+        for row in result:
+            html += f'<option value="{row.id}">{row.title[:40]}</option>'
+        return html
+    except ProgrammingError:
+        return ""
 
 
 @router.get("/api/problems", response_class=HTMLResponse)
@@ -559,21 +561,23 @@ def list_problems(
 @router.get("/api/queries", response_class=HTMLResponse)
 def list_recent_queries(limit: int = 10, db: Session = Depends(get_db)):
     """List recent queries."""
-    result = db.execute(text("""
-        SELECT 
-            q.id,
-            LEFT(q.input_text, 100) as input_text,
-            q.status,
-            q.processing_time_ms,
-            q.created_at,
-            r.confidence_score
-        FROM queries q
-        LEFT JOIN responses r ON r.query_id = q.id
-        ORDER BY q.created_at DESC
-        LIMIT :limit
-    """), {"limit": limit})
-    
-    rows = list(result)
+    try:
+        result = db.execute(text("""
+            SELECT 
+                q.id,
+                LEFT(q.input_text, 100) as input_text,
+                q.status,
+                q.processing_time_ms,
+                q.created_at,
+                r.confidence_score
+            FROM queries q
+            LEFT JOIN responses r ON r.query_id = q.id
+            ORDER BY q.created_at DESC
+            LIMIT :limit
+        """), {"limit": limit})
+        rows = list(result)
+    except ProgrammingError:
+        return "<p class='text-gray-500'>Запросов пока нет</p>"
     
     if not rows:
         return "<p class='text-gray-500'>Запросов пока нет</p>"

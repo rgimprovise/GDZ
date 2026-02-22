@@ -233,7 +233,54 @@ docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps -a
 
 ---
 
-## 4. Полезные команды на VPS
+## 4. Проверка PDF на VPS
+
+Данные (в т.ч. PDF) монтируются в контейнер из каталога **`/opt/tutorbot/data`** (путь `../data` относительно `infra/`). PDF должны лежать в `data/pdfs/`.
+
+**Проверить наличие PDF на VPS:**
+
+```bash
+# Список файлов в каталоге PDF
+ls -la /opt/tutorbot/data/pdfs
+
+# Все PDF в data (включая вложенные папки)
+find /opt/tutorbot/data -name "*.pdf"
+
+# Есть ли каталог data и подкаталог pdfs
+ls -la /opt/tutorbot/data
+ls -la /opt/tutorbot/data/pdfs 2>/dev/null || echo "Каталог pdfs отсутствует"
+```
+
+Если каталога нет: `mkdir -p /opt/tutorbot/data/pdfs`. Скопировать PDF с локальной машины: `rsync -avz ./data/ user@VPS_IP:/opt/tutorbot/data/`.
+
+---
+
+## 5. Debug-панель «в состоянии подгрузки»
+
+Если страница **https://gdz.n8nrgimprovise.space/debug** открывается, но блоки «Книг», «Задач», «Книги в базе» и т.д. остаются скелетонами (серые полоски), значит запросы HTMX к `/debug/api/*` не доходят или API возвращает ошибку.
+
+**Проверка на VPS:**
+
+```bash
+cd /opt/tutorbot/infra
+
+# Ответ API по статистике и книгам (должен быть HTML, не 500)
+curl -s -o /dev/null -w "%{http_code}" https://gdz.n8nrgimprovise.space/debug/api/stats
+curl -s https://gdz.n8nrgimprovise.space/debug/api/stats | head -5
+curl -s https://gdz.n8nrgimprovise.space/debug/api/books | head -5
+
+# Логи API — ошибки при запросе к БД (нет таблиц, нет подключения)
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs --tail 50 api
+```
+
+**Частые причины:**
+- **Миграции не применены** — таблиц `books`, `problems`, `pdf_pages` нет, API падает с 500. Выполните:  
+  `docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml exec api alembic upgrade head`
+- **БД пустая** — после миграций панель покажет нули и «Книги не найдены»; это нормально, пока не добавлены книги и PDF (seed_books, загрузка PDF в `data/pdfs/`, ingestion).
+
+---
+
+## 6. Полезные команды на VPS
 
 ```bash
 cd /opt/tutorbot/infra
@@ -252,7 +299,7 @@ docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d
 
 ---
 
-## 5. Итог
+## 7. Итог
 
 | Действие              | Где      | Команда |
 |-----------------------|----------|---------|
