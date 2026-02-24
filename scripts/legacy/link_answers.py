@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Parse answers from OCR pages and link to problems.
+[LEGACY] Parse answers from OCR pages and link to problems.
+Replaced by apps/worker/segmentation/answers.py (PR5, doc_map-driven). Kept for reference.
 
 Usage:
-    python scripts/link_answers.py --book-id 1
-    python scripts/link_answers.py --book-id 1 --dry-run
+    python scripts/legacy/link_answers.py --book-id 1
+    python scripts/legacy/link_answers.py --book-id 1 --dry-run
 """
 
 import re
@@ -13,7 +14,7 @@ import argparse
 from pathlib import Path
 
 # Add parent to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "apps" / "worker"))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "apps" / "worker"))
 
 from sqlalchemy import text
 from database import SessionLocal
@@ -155,7 +156,7 @@ def update_problems(db, book_id: int, answers: dict, dry_run: bool = False) -> t
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Link answers to problems from OCR")
+    parser = argparse.ArgumentParser(description="Link answers to problems from OCR (legacy)")
     parser.add_argument("--book-id", type=int, required=True, help="Book ID")
     parser.add_argument("--dry-run", action="store_true", help="Don't update DB")
     args = parser.parse_args()
@@ -178,7 +179,7 @@ def main():
         print(f"✅ Parsed {total} answers from {len(answers)} paragraphs")
         
         # Show sample
-        for para in sorted(answers.keys(), key=int)[:5]:
+        for para in sorted(answers.keys(), key=lambda x: int(x) if x.isdigit() else 0)[:5]:
             items = list(answers[para].items())[:3]
             print(f"\n   § {para}:")
             for num, ans in items:

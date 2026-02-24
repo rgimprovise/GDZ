@@ -8,7 +8,7 @@
 
 - **ОС:** Ubuntu 22.04 / 24.04 или Debian 12 (рекомендуется).
 - **Ресурсы:** минимум 2 GB RAM, 2 CPU; для OCR (Tesseract) и нескольких воркеров — 4 GB RAM и больше.
-- **Диск:** 20+ GB (БД, PDF, `data/ocr_raw`, `data/ocr_normalized`, образы Docker).
+- **Диск:** 20+ GB (БД, PDF, `data/ocr_raw`, `data/ocr_normalized`, `data/page_images`, образы Docker).
 - **Сеть:** открыть порты 80, 443 (если ставите nginx + SSL) и по желанию 22 для SSH.
 
 Установка Docker на Ubuntu/Debian:
@@ -46,7 +46,8 @@ sudo usermod -aG docker $USER
 ├── data/               # скопирован с текущей машины
 │   ├── pdfs/           # PDF учебников
 │   ├── ocr_raw/        # после первого запуска по новому пайплайну
-│   └── ocr_normalized/
+│   ├── ocr_normalized/
+│   └── page_images/    # изображения страниц (PR9), для debug
 └── ...
 ```
 

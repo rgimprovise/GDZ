@@ -109,6 +109,8 @@ def correct_normalized_pages(
     checkpoint_path: Optional[Path] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
+    quality_scores: Optional[List[float]] = None,
+    llm_gate_threshold: float = 70.0,
 ) -> List[str]:
     """
     Прогнать нормализованный постраничный текст через OpenAI для исправления OCR и формул.
@@ -116,16 +118,21 @@ def correct_normalized_pages(
     Ограничения на символы в формулах заданы в SYSTEM_PROMPT (Unicode + ^, без LaTeX).
     При отсутствии API ключа или ошибке возвращается исходный список без изменений.
 
+    Cost control (PR8): если передан quality_scores (длина == len(page_texts)), то страницы
+    с score >= llm_gate_threshold не отправляются в LLM — остаётся исходный текст.
+
     Чекпоинт: если передан checkpoint_path, после каждого батча прогресс сохраняется.
     При повторном запуске с тем же путём уже обработанные страницы не отправляются в API снова.
 
     Args:
-        page_texts: список текстов страниц (после ocr_cleaner).
+        page_texts: список текстов страниц (после ocr_cleaner + formula_processor).
         subject: предмет (geometry, math, physics, ...) для контекста.
         batch_size: сколько страниц отправлять в одном запросе.
         model: модель OpenAI (по умолчанию из env или gpt-4o).
         checkpoint_path: путь к JSON-чекпоинту для продолжения после сбоя.
         progress_callback: вызывается после каждого батча с (current, total).
+        quality_scores: опционально список скоров качества (0–100) по страницам; при score >= threshold LLM не вызывается.
+        llm_gate_threshold: порог (0–100); страницы с score >= не отправляются в LLM.
 
     Returns:
         Список исправленных текстов той же длины.
@@ -145,6 +152,14 @@ def correct_normalized_pages(
     client = OpenAI(api_key=OPENAI_API_KEY)
     model_name = model or os.environ.get("OPENAI_MODEL_TEXT", OPENAI_MODEL)
     total_pages = len(page_texts)
+    # Страницы с score >= threshold не отправляем в LLM (cost control)
+    need_llm_set = set(range(total_pages))
+    if quality_scores is not None and len(quality_scores) == total_pages:
+        need_llm_set = {i for i in range(total_pages) if quality_scores[i] < llm_gate_threshold}
+        skipped = total_pages - len(need_llm_set)
+        if skipped:
+            print(f"   📊 LLM gate: {skipped} страниц с качеством >={llm_gate_threshold} пропущены")
+
     done_indices: set[int] = set()
     if checkpoint_path:
         result, done_indices = _load_checkpoint(checkpoint_path, total_pages, page_texts)
@@ -175,11 +190,30 @@ def correct_normalized_pages(
                 progress_callback(end, total_pages)
             continue
 
-        batch = page_texts[start:end]
-        chunk = _build_batch_chunk(batch, start)
+        # Только страницы, которым нужен LLM, отправляем в API; остальные оставляем как есть
+        indices_to_send = [i for i in range(start, end) if i in need_llm_set and i not in done_indices]
+        for i in range(start, end):
+            if i not in need_llm_set:
+                result[i] = page_texts[i] if i < len(page_texts) else ""
+                done_indices.add(i)
+
+        if not indices_to_send:
+            if progress_callback:
+                progress_callback(end, total_pages)
+            continue
+
+        # Собираем один блок для отправки: только страницы из indices_to_send
+        chunk_lines = []
+        for i in indices_to_send:
+            chunk_lines.append(f"## Страница {i + 1}")
+            chunk_lines.append("")
+            chunk_lines.append((page_texts[i] if i < len(page_texts) else "").strip())
+            chunk_lines.append("")
+        chunk = "\n".join(chunk_lines).rstrip()
+
         if not chunk.strip():
-            for i in range(start, end):
-                result[i] = page_texts[i]
+            for i in indices_to_send:
+                result[i] = page_texts[i] if i < len(page_texts) else ""
                 done_indices.add(i)
             if checkpoint_path:
                 _save_checkpoint(checkpoint_path, result, done_indices)
@@ -204,16 +238,15 @@ def correct_normalized_pages(
                 idx = page_num - 1
                 if 0 <= idx < len(result):
                     result[idx] = text
-            for i in range(start, end):
+            for i in indices_to_send:
                 if not result[i] and i < len(page_texts):
                     result[i] = page_texts[i]
-            for i in range(start, end):
                 done_indices.add(i)
             if checkpoint_path:
                 _save_checkpoint(checkpoint_path, result, done_indices)
         except Exception as e:
             print(f"   ⚠️  LLM-коррекция батча {batch_idx + 1}/{total_batches}: {e}")
-            for i in range(start, end):
+            for i in indices_to_send:
                 result[i] = page_texts[i] if i < len(page_texts) else ""
             if checkpoint_path:
                 _save_checkpoint(checkpoint_path, result, done_indices)

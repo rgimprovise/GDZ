@@ -14,14 +14,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query as QueryParam, Form, File, UploadFile
-from fastapi.responses import HTMLResponse
+import os
+from fastapi import APIRouter, Depends, Query as QueryParam, Form, File, UploadFile, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text, func
 from sqlalchemy.exc import ProgrammingError
 
 from database import get_db
-from models import Book, PdfSource, Query, User
+from models import Book, PdfSource, PdfPage, Query, User
 from config import get_settings
 from job_queue import enqueue_ingestion, enqueue_llm_normalize, enqueue_import_from_normalized
 
@@ -1046,7 +1047,7 @@ def db_preview(
                    LEFT(p.problem_text, 300) as problem_text,
                    LEFT(p.answer_text, 150) as answer_text,
                    p.solution_text IS NOT NULL as has_solution,
-                   pp.page_num
+                   pp.page_num, pp.id as source_page_id
             FROM problems p
             LEFT JOIN pdf_pages pp ON p.source_page_id = pp.id
             WHERE p.book_id = :book_id
@@ -1074,13 +1075,16 @@ def db_preview(
             for r in rows:
                 type_cls = {"question": "border-l-blue-400", "exercise": "border-l-green-400"}.get(r.problem_type or "unknown", "border-l-gray-300")
                 pg = f" <span class='text-gray-400 text-xs'>стр.{r.page_num + 1 if r.page_num is not None else '?'}</span>" if r.page_num is not None else ""
+                page_img = ""
+                if getattr(r, "source_page_id", None):
+                    page_img = f" <a href='/debug/api/page-image/{r.source_page_id}' target='_blank' class='text-xs text-blue-600'>картинка</a>"
                 ans = ""
                 if r.answer_text:
                     ans = f"<div class='text-xs text-green-700 mt-1'>Ответ: {_h(r.answer_text)}</div>"
                 elif getattr(r, "has_solution", False):
                     ans = "<span class='text-xs bg-blue-100 px-1 rounded'>решение</span>"
                 parts.append(
-                    f"<div class='border-l-4 {type_cls} pl-3 py-2 mb-2 bg-white rounded-r'><span class='font-semibold'>№{r.number or '?'}</span> <span class='text-gray-500 text-sm'>{r.section or ''}</span>{pg}<div class='text-sm text-gray-700 mt-1'>{_h(r.problem_text or '')}...</div>{ans}</div>"
+                    f"<div class='border-l-4 {type_cls} pl-3 py-2 mb-2 bg-white rounded-r'><span class='font-semibold'>№{r.number or '?'}</span> <span class='text-gray-500 text-sm'>{r.section or ''}</span>{pg}{page_img}<div class='text-sm text-gray-700 mt-1'>{_h(r.problem_text or '')}...</div>{ans}</div>"
                 )
             parts.append("</div>")
         elif content == "problems":
@@ -1093,6 +1097,22 @@ def db_preview(
 def _h(s: str) -> str:
     """Escape HTML for preview."""
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+@router.get("/api/page-image/{pdf_page_id}", response_class=FileResponse)
+def get_page_image(pdf_page_id: int, db: Session = Depends(get_db)):
+    """
+    PR9: Вернуть изображение страницы PDF по id pdf_pages.
+    Используется в debug: по source_page_id задачи можно получить картинку страницы.
+    """
+    page = db.query(PdfPage).filter(PdfPage.id == pdf_page_id).first()
+    if not page or not page.image_minio_key:
+        raise HTTPException(status_code=404, detail="Page or image not found")
+    base = Path(os.environ.get("DATA_DIR", "data"))
+    path = base / page.image_minio_key.strip()
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Image file not found")
+    return FileResponse(path, media_type="image/png")
 
 
 @router.get("/api/queries", response_class=HTMLResponse)

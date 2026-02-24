@@ -66,10 +66,7 @@ GDZ/
 │   ├── seed_books.py     # Классификация PDF в data/pdfs, создание books + pdf_sources
 │   ├── reingest_all_books.py  # Очистка страниц/задач, pending, постановка ingestion в очередь
 │   ├── apply_migrations.sh / up.sh  # Миграции и запуск стека
-│   ├── process_all.py    # По книге: classify_problems, assign_sections, link_answers, link_theory
-│   ├── link_answers.py   # Парсинг «Ответы» из ocr_text, проставление answer_text в problems
-│   ├── link_theory.py    # Связь вопросов с блоками теории по ключевым словам
-│   ├── assign_sections.py # Привязка задач к параграфам по страницам
+│   ├── legacy/           # assign_sections, link_answers, link_theory, process_all (см. canonical pipeline)
 │   ├── classify_problems.py  # Классификация тип задачи: question / exercise / unknown
 │   ├── parse_problem_parts.py # Разбиение задач на подпункты (1) 2) 3)), ответы по частям
 │   ├── parse_answers.py  # Парсинг ответов из PDF (альтернатива link_answers)
@@ -223,10 +220,10 @@ PDF в data/pdfs/ + запись в pdf_sources (seed_books)
 |--------|------------|-------------|
 | **seed_books.py** | Классификация PDF в `data/pdfs/`, создание записей в `books` и `pdf_sources` | PyMuPDF (извлечение текста для классификации), БД |
 | **reingest_all_books.py** | Очистка pdf_pages и problems по всем источникам, установка status=pending, постановка ingestion в очередь | БД, Redis, импорт ingestion (enqueue_ingestion) |
-| **process_all.py** | Последовательный запуск по книге: classify_problems, assign_sections, link_answers, link_theory | БД, модули assign_sections, link_answers, link_theory, classify_problems |
-| **link_answers.py** | Поиск страниц с «Ответы», парсинг номеров и ответов, обновление problems.answer_text | БД |
-| **link_theory.py** | Извлечение блоков теории из ocr_text, сопоставление с вопросами, обновление связей | БД |
-| **assign_sections.py** | Определение параграфа по странице (§ на странице), проставление problems.section | БД |
+| **legacy/process_all.py** | [Legacy] По книге: classify + assign_sections + link_answers + link_theory | БД, scripts/classify_problems, legacy/assign_sections, link_answers, link_theory |
+| **legacy/link_answers.py** | [Legacy] Парсинг ответов по § + номер, обновление problems.answer_text | БД |
+| **legacy/link_theory.py** | [Legacy] Блоки теории из ocr_text, сопоставление с вопросами | БД |
+| **legacy/assign_sections.py** | [Legacy] § на странице → problems.section | БД |
 | **classify_problems.py** | Классификация типа задачи (question / exercise / unknown) по тексту | БД |
 | **parse_problem_parts.py** | Разбиение задач на подпункты (1) 2) 3)), разбор ответов по частям, опционально clean_ocr_text | БД, ocr_cleaner |
 | **parse_answers.py** | Парсинг ответов из PDF (альтернативный способ заполнения answer_text) | БД, PyMuPDF |
@@ -262,7 +259,7 @@ PDF в data/pdfs/ + запись в pdf_sources (seed_books)
 ### 7.3 Переменные окружения (основные)
 
 - **API/Worker:** POSTGRES_HOST, POSTGRES_*, REDIS_URL, MINIO_*, BASE_URL, JWT_SECRET, OPENAI_API_KEY, OPENAI_MODEL_TEXT.
-- **Worker:** DATA_DIR (каталог данных: pdfs, ocr_raw, ocr_normalized).
+- **Worker:** DATA_DIR (каталог данных: pdfs, ocr_raw, ocr_normalized, page_images).
 - **Bot:** TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET, REDIS_URL.
 - **Infra:** POSTGRES_PASSWORD, MINIO_ACCESS_KEY, MINIO_SECRET_KEY (и др. в env.example).
 
@@ -288,7 +285,7 @@ PDF в data/pdfs/ + запись в pdf_sources (seed_books)
 ## 9. Связи между компонентами
 
 - **API** создаёт Query и ставит задачу в Redis (очередь `queries`). Worker обрабатывает задачу и пишет в Query/Response; бот/клиент получают результат по GET или через уведомление.
-- **Ingestion** ставится в очередь `ingestion` (из скрипта reingest_all_books или вручную). Worker читает PDF из `data/` (minio_key как путь относительно DATA_DIR), пишет raw/normalized в `data/ocr_raw` и `data/ocr_normalized`, обновляет pdf_pages, problems, section_theory.
+- **Ingestion** ставится в очередь `ingestion` (из скрипта reingest_all_books или вручную). Worker читает PDF из `data/` (minio_key как путь относительно DATA_DIR), пишет raw/normalized в `data/ocr_raw` и `data/ocr_normalized`, сохраняет изображения страниц в `data/page_images`, обновляет pdf_pages (в т.ч. image_minio_key), problems, section_theory.
 - **retrieval** и **llm** в worker используют одни и те же модели БД (Problem, Book, SectionTheory, PdfPage); llm запрашивает теорию параграфа для улучшения объяснения.
 - **Скрипты** не входят в образы API/Worker; для их работы нужен доступ к БД (и при необходимости к Redis, каталогу data/, модулям apps/worker типа ocr_cleaner).
 

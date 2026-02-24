@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Assign section (paragraph) numbers to problems based on page content.
+[LEGACY] Assign section (paragraph) numbers to problems based on page content.
+Prefer doc_map-driven section assignment from ingestion (PR4). Kept for reference.
 
 Usage:
-    python scripts/assign_sections.py --book-id 1
+    python scripts/legacy/assign_sections.py --book-id 1
 """
 
 import re
@@ -11,13 +12,13 @@ import sys
 import argparse
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "apps" / "worker"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "apps" / "worker"))
 
 from sqlalchemy import text
 from database import SessionLocal
 
 
-def get_page_sections(db, book_id: int) -> dict[int, str]:
+def get_page_sections(db, book_id: int) -> dict:
     """
     Determine which section each page belongs to.
     Returns: {page_id: section_number}
@@ -37,20 +38,17 @@ def get_page_sections(db, book_id: int) -> dict[int, str]:
         page_id = row.id
         text_content = row.ocr_text or ""
         
-        # Look for section header - OCR often confuses § with $ or S
-        # Patterns: "§ 1." "$ 1." "§1." "$1." "§ 1 " "$ 8," etc.
         section_match = re.search(r'[§$S]\s*(\d{1,2})[.,\s]', text_content[:800])
-        
-        # Also check for "N класс" pattern which indicates section continuation
         if not section_match:
-            # Look for header like "§ 11. Подобие фигур" anywhere in first 200 chars
             section_match = re.search(r'[§$]\s*(\d{1,2})\.\s*[А-Яа-я]', text_content[:200])
         
         if section_match:
             new_section = section_match.group(1)
-            # Sanity check - section should be 1-25 for typical textbook
-            if 1 <= int(new_section) <= 25:
-                current_section = new_section
+            try:
+                if 1 <= int(new_section) <= 25:
+                    current_section = new_section
+            except ValueError:
+                pass
         
         if current_section:
             page_sections[page_id] = current_section
@@ -60,8 +58,6 @@ def get_page_sections(db, book_id: int) -> dict[int, str]:
 
 def update_problem_sections(db, book_id: int, page_sections: dict, dry_run: bool = False) -> int:
     """Update problems with their section numbers."""
-    
-    # Get problems with their source pages
     result = db.execute(text("""
         SELECT p.id, p.number, p.source_page_id, p.section
         FROM problems p
@@ -90,7 +86,7 @@ def update_problem_sections(db, book_id: int, page_sections: dict, dry_run: bool
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Assign sections to problems")
+    parser = argparse.ArgumentParser(description="Assign sections to problems (legacy)")
     parser.add_argument("--book-id", type=int, required=True, help="Book ID")
     parser.add_argument("--dry-run", action="store_true", help="Don't update DB")
     args = parser.parse_args()
@@ -100,7 +96,7 @@ def main():
         print(f"📚 Analyzing pages for book {args.book_id}...")
         page_sections = get_page_sections(db, args.book_id)
         
-        unique_sections = sorted(set(page_sections.values()), key=int)
+        unique_sections = sorted(set(page_sections.values()), key=lambda x: int(x) if str(x).isdigit() else 0)
         print(f"✅ Found {len(unique_sections)} sections: §{', §'.join(unique_sections[:10])}...")
         
         print(f"\n🔍 {'Checking' if args.dry_run else 'Updating'} problems...")

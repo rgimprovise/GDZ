@@ -56,14 +56,16 @@
 
 ### 1.5 Постобработка по книге (process_all)
 
-| Шаг | Статус | Скрипт | Назначение |
-|-----|--------|--------|------------|
-| Классификация | ✅ | `classify_problems.py` | question / exercise / unknown по ключевым словам |
-| Секции | ✅ | `assign_sections.py` | § N, Параграф N → problems.section |
-| Ответы | ✅ | `link_answers.py` | Страницы «Ответы и указания» → парсинг ответов по § + номер → problems.answer_text |
-| Теория | ✅ | `link_theory.py` | Блоки теории по параграфам из ocr_text (для LLM) |
+Каноничный пайплайн: `pipeline.run.run_ingestion(pdf_source_id)` или `scripts/dev/smoke_ingest.py`. Секции/ответы/теория из doc_map при ингестии (PR4–PR5).
 
-Доп. скрипты: `parse_problem_parts.py`, `validate_ocr_quality.py`, `validate_ocr.py`, `fix_formulas.py`, `parse_answers.py`, `classify_pdfs.py`.
+| Шаг | Статус | Скрипт / модуль | Назначение |
+|-----|--------|-----------------|------------|
+| Классификация | ✅ | `classify_problems.py` | question / exercise / unknown по ключевым словам |
+| Секции | ✅ | doc_map/ingestion или `legacy/assign_sections.py` | § N, Параграф N → problems.section |
+| Ответы | ✅ | segmentation/answers или `legacy/link_answers.py` | Парсинг ответов по § + номер → problems.answer_text |
+| Теория | ✅ | segmentation/theory или `legacy/link_theory.py` | Блоки теории по параграфам (для LLM) |
+
+Legacy мастер-скрипт: `scripts/legacy/process_all.py --book-id N`. Доп. скрипты: `parse_problem_parts.py`, `validate_ocr_quality.py`, `validate_ocr.py`, `fix_formulas.py`, `parse_answers.py`, `classify_pdfs.py`.
 
 ---
 
@@ -157,8 +159,8 @@ POST /v1/queries → Query (queued) → RQ queue "queries"
 ### 4.3 Постобработка по книге (ручной запуск)
 
 ```
-process_all.py --book-id N
-  → classify_problems → assign_sections → link_answers → link_theory
+run_ingestion(pdf_source_id) или legacy/process_all.py --book-id N
+  → classify_problems → (doc_map) assign_sections / link_answers / link_theory (или legacy-скрипты)
 ```
 
 ---

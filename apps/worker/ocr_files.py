@@ -37,6 +37,41 @@ def get_llm_checkpoint_path(book_id: int, pdf_source_id: int) -> Path:
     return base / "ocr_normalized" / str(book_id) / f"{pdf_source_id}.llm_checkpoint.json"
 
 
+def get_page_images_dir(book_id: int, pdf_source_id: int) -> Path:
+    """Каталог изображений страниц: data/page_images/{book_id}/{pdf_source_id}/."""
+    base = get_data_base()
+    return base / "page_images" / str(book_id) / str(pdf_source_id)
+
+
+def save_page_image(book_id: int, pdf_source_id: int, page_num: int, png_bytes: bytes) -> Optional[str]:
+    """
+    Сохранить PNG страницы на диск; вернуть относительный ключ для PdfPage.image_minio_key.
+    Ключ: page_images/{book_id}/{pdf_source_id}/page_{page_num}.png (для разрешения через DATA_DIR).
+    """
+    try:
+        dir_path = get_page_images_dir(book_id, pdf_source_id)
+        dir_path.mkdir(parents=True, exist_ok=True)
+        path = dir_path / f"page_{page_num}.png"
+        path.write_bytes(png_bytes)
+        return f"page_images/{book_id}/{pdf_source_id}/page_{page_num}.png"
+    except Exception:
+        return None
+
+
+def resolve_page_image_path(image_minio_key: Optional[str]) -> Optional[Path]:
+    """
+    Разрешить image_minio_key (относительный путь) в полный путь к файлу.
+    Для использования в debug/API при отдаче изображения страницы.
+    """
+    if not image_minio_key or not image_minio_key.strip():
+        return None
+    base = get_data_base()
+    path = base / image_minio_key.strip()
+    if path.exists() and path.is_file():
+        return path
+    return None
+
+
 PAGE_HEADER = re.compile(r"^##\s+Страница\s+(\d+)\s*$", re.IGNORECASE)
 
 
@@ -78,36 +113,88 @@ RE_HEADER_CLASS = re.compile(r"^\s*[\d\s]*\d+\s*класс\s*$", re.IGNORECASE)
 RE_PAGE_NUMBER_ONLY = re.compile(r"^\s*\d+\s*$")
 RE_HEADER_ARTIFACT = re.compile(r"^\s*[\d\s]{1,15}\s*$")  # только цифры/пробелы, короткая строка
 
+# PR6: не удалять нумерованные пункты (1) … 2) … или 1. … 2. …) даже в зоне колонтитулов
+RE_ENUMERATION_START = re.compile(r"^\s*\d+\s*[.)]\s+", re.IGNORECASE)
 
-def strip_page_headers_footers(text: str) -> str:
+
+def _is_header_footer_candidate(stripped: str) -> Optional[str]:
     """
-    Удалить из текста страницы типичные колонтитулы (header/footer), которые
-    попадают в OCR из верстки учебника (например «N класс», номер страницы).
-    Не меняет основной текст параграфа и задач.
+    Return pattern name if line looks like header/footer, else None.
+    Used only in top/bottom zone; enumerations are excluded separately.
+    """
+    if not stripped:
+        return None
+    if RE_HEADER_CLASS.match(stripped):
+        return "class"
+    if RE_PAGE_NUMBER_ONLY.match(stripped):
+        return "page_number"
+    if len(stripped) <= 15 and RE_HEADER_ARTIFACT.match(stripped):
+        return "artifact"
+    return None
+
+
+def strip_page_headers_footers(
+    text: str,
+    top_bottom_n: int = 4,
+    stats: Optional[dict] = None,
+) -> str:
+    """
+    PR6 — Удалять колонтитулы только в первых и последних N строках страницы.
+    Строки в середине страницы не трогаем (нет потери нумераций 1) 2) и т.д.).
+    Передайте stats={} для отчёта: что и сколько удалено.
     """
     if not (text or "").strip():
         return text or ""
-    lines = []
-    for line in (text or "").split("\n"):
+    lines = (text or "").split("\n")
+    n = max(0, top_bottom_n)
+    top_indices = set(range(min(n, len(lines))))
+    bottom_indices = set(range(max(0, len(lines) - n), len(lines))) if len(lines) > 2 * n else set()
+
+    result = []
+    stripped_count = 0
+    by_pattern = {}
+
+    for i, line in enumerate(lines):
         stripped = line.strip()
         if not stripped:
-            lines.append(line)
+            result.append(line)
             continue
-        if RE_HEADER_CLASS.match(stripped):
+        # Только в зоне колонтитулов проверяем удаление
+        in_zone = i in top_indices or i in bottom_indices
+        if not in_zone:
+            result.append(line)
             continue
-        if RE_PAGE_NUMBER_ONLY.match(stripped):
+        # Не удалять нумерованные пункты (1) … 2. …)
+        if RE_ENUMERATION_START.match(stripped):
+            result.append(line)
             continue
-        if len(stripped) <= 15 and RE_HEADER_ARTIFACT.match(stripped):
+        pattern = _is_header_footer_candidate(stripped)
+        if pattern:
+            stripped_count += 1
+            by_pattern[pattern] = by_pattern.get(pattern, 0) + 1
             continue
-        lines.append(line)
-    return "\n".join(lines).strip()
+        result.append(line)
+
+    if stats is not None:
+        stats["stripped_count"] = stats.get("stripped_count", 0) + stripped_count
+        for p, c in by_pattern.items():
+            stats["by_pattern"] = stats.get("by_pattern") or {}
+            stats["by_pattern"][p] = stats["by_pattern"].get(p, 0) + c
+
+    return "\n".join(result).strip()
 
 
 def strip_headers_footers_from_pages(
     pages_data: list[tuple[int, str]],
+    top_bottom_n: int = 4,
+    stats: Optional[dict] = None,
 ) -> list[tuple[int, str]]:
-    """Применить strip_page_headers_footers к тексту каждой страницы."""
-    return [(page_num, strip_page_headers_footers(text)) for page_num, text in pages_data]
+    """Применить strip_page_headers_footers к тексту каждой страницы. PR6: top/bottom only; optional stats."""
+    out = []
+    for page_num, text in pages_data:
+        cleaned = strip_page_headers_footers(text, top_bottom_n=top_bottom_n, stats=stats)
+        out.append((page_num, cleaned))
+    return out
 
 
 def parse_md_by_pages(content: str) -> list[tuple[int, str]]:

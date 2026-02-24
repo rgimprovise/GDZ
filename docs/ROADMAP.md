@@ -29,8 +29,8 @@
 | Push уведомления | ✅ | Уведомления в Telegram |
 | Ingestion | ✅ | Загрузка и обработка PDF |
 | Классификация задач | ✅ | question/exercise/unknown |
-| Привязка ответов | ✅ | link_answers.py |
-| Привязка теории | ✅ | link_theory.py |
+| Привязка ответов | ✅ | segmentation/answers или legacy/link_answers.py |
+| Привязка теории | ✅ | segmentation/theory или legacy/link_theory.py |
 
 ### ❌ Что НЕ работает (следующие шаги):
 
@@ -1070,19 +1070,21 @@ export async function authenticate() {
 6. ✅ Таблицы books/pdf_sources/pdf_pages/problems (done)
 7. ✅ FTS поиск (done - `apps/worker/retrieval.py`)
 8. ✅ Классификация задач: вопросы vs упражнения (`scripts/classify_problems.py`)
-9. ✅ Назначение секций (§N) задачам (`scripts/assign_sections.py`)
-10. ✅ Привязка ответов к упражнениям (`scripts/link_answers.py`)
-11. ✅ Привязка теории к вопросам (`scripts/link_theory.py`)
+9. ✅ Назначение секций (§N) задачам (doc_map/ingestion или `scripts/legacy/assign_sections.py`)
+10. ✅ Привязка ответов к упражнениям (segmentation/answers или `scripts/legacy/link_answers.py`)
+11. ✅ Привязка теории к вопросам (segmentation/theory или `scripts/legacy/link_theory.py`)
 
 ### Скрипты обработки данных
+
+**Каноничный пайплайн:** `pipeline.run.run_ingestion(pdf_source_id)` или `scripts/dev/smoke_ingest.py`.
 
 | Скрипт | Описание | Команда |
 |--------|----------|---------|
 | `classify_problems.py` | Классифицирует задачи: `question` / `exercise` | `python scripts/classify_problems.py --book-id 1` |
-| `assign_sections.py` | Назначает секции (§N) на основе OCR | `python scripts/assign_sections.py --book-id 1` |
-| `link_answers.py` | Парсит ответы из конца учебника | `python scripts/link_answers.py --book-id 1` |
-| `link_theory.py` | Парсит теорию/доказательства для вопросов | `python scripts/link_theory.py --book-id 1` |
-| `process_all.py` | **Мастер-скрипт** - запускает все шаги | `python scripts/process_all.py --book-id 1` |
+| `legacy/assign_sections.py` | [Legacy] Секции (§N) по OCR | `python scripts/legacy/assign_sections.py --book-id 1` |
+| `legacy/link_answers.py` | [Legacy] Парсит ответы из конца учебника | `python scripts/legacy/link_answers.py --book-id 1` |
+| `legacy/link_theory.py` | [Legacy] Теория/доказательства для вопросов | `python scripts/legacy/link_theory.py --book-id 1` |
+| `legacy/process_all.py` | [Legacy] Мастер: classify + sections + answers + theory | `python scripts/legacy/process_all.py --book-id 1` |
 | `validate_ocr.py` | Валидация качества OCR | `python scripts/validate_ocr.py --book-id 1 --page 10` |
 | `fix_formulas.py` | Исправление формул после OCR | `python scripts/fix_formulas.py` |
 

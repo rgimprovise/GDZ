@@ -22,7 +22,7 @@ RE_SOLUTION_START = re.compile(
     r"|^\s*О\s*т\s*в\s*е\s*т\s*\.|^\s*Ответ\s*\.",
     re.IGNORECASE,
 )
-# Начало задачи/упражнения (для границы блока). Не включаем сюда просто "N. " — см. _looks_like_theory_header.
+# Начало задачи/упражнения (для границы блока). PR2: § and Параграф are NOT problem starts — only section boundaries (RE_SECTION_HEADER / RE_PARAGRAPH_START).
 RE_PROBLEM_START = re.compile(
     r"^\s*(?:Контрольное задание|Контрольные задания|Практическое задание)"
     r"\s*(?:№\s*)?(?:\(\s*)?\d+(?:\))?|"
@@ -30,7 +30,6 @@ RE_PROBLEM_START = re.compile(
     r"^\s*Упражнение\s+\d+|^\s*Упражнение\s*\(\s*\d+\s*\)|"
     r"^\s*Вопрос\s*(?:№\s*)?(?:\(\s*)?\d+(?:\))?|"
     r"^\s*Задание\s*\(\s*\d+\s*\)|^\s*Задание\s+\d+|^\s*Задание\s*(?:№\s*)?\d+|"
-    r"^\s*[§\$]\s*\d+(?:\.\d+)?|^\s*Параграф\s*\d+|"
     r"^\s*Exercise\s+\d+|^\s*№\s*\d+(?:\.\d+)?|"
     r"^\s*\d+\)\s+",
     re.IGNORECASE,
@@ -389,73 +388,62 @@ def build_paragraph_user_prompt(section_label: str, paragraph_text: str, subject
 
 
 def call_llm_paragraph(
-    section_label: str, paragraph_text: str, subject: str, start_page: int
+    section_label: str,
+    paragraph_text: str,
+    subject: str,
+    start_page: int,
+    audit_dir: Optional[Any] = None,
+    audit_key: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    """Один вызов LLM: один параграф → список блоков. Каждому блоку добавляется _page_num = start_page."""
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        return []
-    try:
-        from openai import OpenAI
-    except ImportError:
-        return []
-    client = OpenAI(api_key=api_key)
-    model = os.environ.get("OPENAI_MODEL_TEXT", "gpt-4o")
-    user_content = build_paragraph_user_prompt(section_label, paragraph_text, subject)
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": PARAGRAPH_SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        temperature=0.1,
+    """Один вызов LLM: один параграф → список блоков. Каждому блоку добавляется _page_num = start_page.
+    PR1: uses structured llm_call; on parse failure persists raw and raises (no silent return []).
+    """
+    from llm.structured import llm_call, parse_blocks_response, make_audit_key
+
+    def parse_and_attach_page(raw_str: str) -> list[dict[str, Any]]:
+        blocks = parse_blocks_response(raw_str)
+        for b in blocks:
+            b["_page_num"] = start_page
+        return blocks
+
+    messages = [
+        {"role": "system", "content": PARAGRAPH_SYSTEM_PROMPT},
+        {"role": "user", "content": build_paragraph_user_prompt(section_label, paragraph_text, subject)},
+    ]
+    key = audit_key or make_audit_key("paragraph")
+    result = llm_call(
+        messages,
+        parse_and_attach_page,
+        audit_dir=audit_dir,
+        audit_key=key,
     )
-    raw = (resp.choices[0].message.content or "").strip()
-    if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```\s*$", "", raw)
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return []
-    blocks = data.get("blocks") or []
-    for b in blocks:
-        b["_page_num"] = start_page
-    return blocks
+    return result or []
 
 
-def call_llm_batch(blocks: list[PreprocessBlock], subject: str) -> list[dict[str, Any]]:
-    """Один вызов OpenAI: батч блоков → JSON с разметкой."""
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not api_key:
-        return []
-    try:
-        from openai import OpenAI
-    except ImportError:
-        return []
+def call_llm_batch(
+    blocks: list[PreprocessBlock],
+    subject: str,
+    audit_dir: Optional[Any] = None,
+    audit_key: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Один вызов OpenAI: батч блоков → JSON с разметкой.
+    PR1: uses structured llm_call; on parse failure persists raw and raises (no silent return []).
+    """
+    from llm.structured import llm_call, parse_blocks_response, make_audit_key
 
-    client = OpenAI(api_key=api_key)
-    model = os.environ.get("OPENAI_MODEL_TEXT", "gpt-4o")
     user_content = build_user_prompt(blocks, subject)
-
-    resp = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
-        temperature=0.1,
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+    key = audit_key or make_audit_key("batch")
+    result = llm_call(
+        messages,
+        parse_blocks_response,
+        audit_dir=audit_dir,
+        audit_key=key,
     )
-    raw = (resp.choices[0].message.content or "").strip()
-    # Убрать markdown-обёртку если есть
-    if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```\s*$", "", raw)
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        return []
-    return data.get("blocks") or []
+    return result or []
 
 
 class ImportDBCancelRequested(Exception):
@@ -473,12 +461,21 @@ def distribute_batches(
     batch_size: int = 18,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     cancel_check: Optional[Callable[[], bool]] = None,
+    book_id: Optional[int] = None,
+    pdf_source_id: Optional[int] = None,
 ) -> list[dict[str, Any]]:
     """
     Сначала пробуем разбить по параграфам (§ N). Если параграфы есть и не один гигантский —
     скармливаем нейросети по одному параграфу. Иначе fallback: препроцессинг по блокам → батчи → LLM.
     cancel_check: между параграфами/батчами проверяется; если True — raise ImportDBCancelRequested.
+    book_id, pdf_source_id: optional; when set, raw LLM responses are persisted to data/llm_audit on parse failure (PR1).
     """
+    from llm.structured import make_audit_key, audit_dir_for_source
+
+    audit_dir = None
+    if book_id is not None and pdf_source_id is not None:
+        audit_dir = audit_dir_for_source(book_id, pdf_source_id)
+
     paragraphs = split_by_paragraphs(pages_data)
     use_paragraph_mode = bool(paragraphs) and (
         len(paragraphs) > 1
@@ -491,7 +488,11 @@ def distribute_batches(
         for idx, (section_label, paragraph_text, start_page) in enumerate(paragraphs):
             if cancel_check and cancel_check():
                 raise ImportDBCancelRequested()
-            parsed = call_llm_paragraph(section_label, paragraph_text, subject, start_page)
+            audit_key = make_audit_key(f"paragraph_{idx}")
+            parsed = call_llm_paragraph(
+                section_label, paragraph_text, subject, start_page,
+                audit_dir=audit_dir, audit_key=audit_key,
+            )
             all_parsed.extend(parsed)
             if progress_callback:
                 progress_callback(idx + 1, total)
@@ -510,7 +511,8 @@ def distribute_batches(
             raise ImportDBCancelRequested()
         start = batch_idx * batch_size
         batch = blocks[start : start + batch_size]
-        parsed = call_llm_batch(batch, subject)
+        audit_key = make_audit_key(f"batch_{batch_idx}")
+        parsed = call_llm_batch(batch, subject, audit_dir=audit_dir, audit_key=audit_key)
         for p in parsed:
             bid = p.get("block_id")
             if bid is not None and 1 <= bid <= len(batch):

@@ -7,6 +7,8 @@ PDF Ingestion Pipeline
 3. LLM-коррекция (OpenAI): исправление ошибок OCR и приведение формул к формату для БД/чата (без шаблонных замен).
 4. Запись в data/ocr_normalized/{book_id}/{source_id}.md и импорт в БД (pdf_pages, сегментация задач и теории).
 
+Canonical entry point (PR7): pipeline.run.run_ingestion(pdf_source_id, mode="full"|"from_normalized"|"reanalyze"|"llm_correct_only").
+
 Usage:
     process_pdf_source(pdf_source_id=1)   # полный цикл OCR → файлы → БД
     import_from_normalized_file(pdf_source_id=1)  # переимпорт из нормализованного файла без OCR
@@ -58,6 +60,27 @@ try:
     HAS_OCR_FILES = True
 except ImportError:
     HAS_OCR_FILES = False
+
+
+def _resolve_pdf_path_with_ocr_variant(pdf_path: Path) -> Path:
+    """
+    Если в той же папке есть файл с припиской «ocr» в имени (например имя_ocr.pdf),
+    вернуть путь к нему — для извлечения встроенного текста без Tesseract.
+    Иначе вернуть исходный путь.
+    """
+    pdf_path = Path(pdf_path)
+    if not pdf_path.exists():
+        return pdf_path
+    base = pdf_path.parent
+    stem = pdf_path.stem
+    ext = pdf_path.suffix.lower() or ".pdf"
+    for candidate in [base / f"{stem}_ocr{ext}", base / f"{stem} ocr{ext}"]:
+        if candidate.exists():
+            return candidate
+    for f in base.iterdir():
+        if f.suffix.lower() == ext and "ocr" in f.stem.lower() and f != pdf_path:
+            return f
+    return pdf_path
 
 
 # ===========================================
@@ -151,8 +174,17 @@ def process_pdf_source(pdf_source_id: int, local_pdf_path: Optional[str] = None)
         # —— 1. Текст страниц: встроенный (get_text) или OCR (Tesseract) ——
         raw_texts = []
         ocr_confidences = []
+        page_image_keys = []  # PR9: ключи изображений страниц для PdfPage.image_minio_key
         model_used = "embedded" if use_embedded_text else "tesseract"
         raw_path = norm_path = None
+
+        if HAS_OCR_FILES:
+            try:
+                from ocr_files import save_page_image
+            except ImportError:
+                save_page_image = None
+        else:
+            save_page_image = None
 
         if use_embedded_text:
             for page_num in range(page_count):
@@ -160,6 +192,15 @@ def process_pdf_source(pdf_source_id: int, local_pdf_path: Optional[str] = None)
                 text = page.get_text(sort=True) or ""
                 raw_texts.append(text)
                 ocr_confidences.append(95)
+                if save_page_image:
+                    try:
+                        pix = page.get_pixmap(dpi=150)
+                        key = save_page_image(book_id, pdf_source_id, page_num, pix.tobytes("png"))
+                        page_image_keys.append(key)
+                    except Exception:
+                        page_image_keys.append(None)
+                else:
+                    page_image_keys.append(None)
                 if (page_num + 1) % 25 == 0 or page_num == page_count - 1:
                     print(f"   📃 Извлечение текста: {page_num + 1}/{page_count} страниц")
         else:
@@ -169,6 +210,14 @@ def process_pdf_source(pdf_source_id: int, local_pdf_path: Optional[str] = None)
                 page = doc[page_num]
                 pix = page.get_pixmap(dpi=150)
                 img_data = pix.tobytes("png")
+                if save_page_image:
+                    try:
+                        key = save_page_image(book_id, pdf_source_id, page_num, img_data)
+                        page_image_keys.append(key)
+                    except Exception:
+                        page_image_keys.append(None)
+                else:
+                    page_image_keys.append(None)
                 img = Image.open(io.BytesIO(img_data))
                 text = ""
                 conf = 70
@@ -203,13 +252,32 @@ def process_pdf_source(pdf_source_id: int, local_pdf_path: Optional[str] = None)
             else:
                 normalized_texts.append(t or "")
 
-        # —— 2b. LLM-коррекция формул и ошибок OCR (OpenAI) ——
+        # —— 2a. Детерминированная коррекция формул (до LLM, PR8) ——
+        try:
+            from formula_processor import post_process_ocr
+            normalized_texts = [post_process_ocr(t or "") for t in normalized_texts]
+        except Exception:
+            pass
+
+        # —— 2b. LLM-коррекция только для страниц с низким качеством (PR8 gating) ——
+        quality_scores = None
+        if HAS_OCR_CLEANER:
+            try:
+                from ocr_cleaner import calculate_quality_score
+                quality_scores = [calculate_quality_score(t or "").get("score", 50) for t in normalized_texts]
+            except Exception:
+                pass
         try:
             from llm_ocr_correct import correct_normalized_pages
             book = db.query(Book).filter(Book.id == book_id).first()
             subject = (book.subject if book else "geometry") or "geometry"
             print(f"   🤖 LLM-коррекция формул/OCR (предмет: {subject})...")
-            normalized_texts = correct_normalized_pages(normalized_texts, subject=subject)
+            normalized_texts = correct_normalized_pages(
+                normalized_texts,
+                subject=subject,
+                quality_scores=quality_scores,
+                llm_gate_threshold=70.0,
+            )
         except Exception as e:
             print(f"   ⚠️ LLM-коррекция пропущена: {e}")
 
@@ -231,11 +299,13 @@ def process_pdf_source(pdf_source_id: int, local_pdf_path: Optional[str] = None)
         for page_num in range(page_count):
             text = normalized_texts[page_num] if page_num < len(normalized_texts) else ""
             conf = ocr_confidences[page_num] if page_num < len(ocr_confidences) else 70
+            image_key = page_image_keys[page_num] if page_num < len(page_image_keys) else None
             pdf_page = PdfPage(
                 pdf_source_id=pdf_source_id,
                 page_num=page_num,
                 ocr_text=text,
                 ocr_confidence=conf,
+                image_minio_key=image_key,
             )
             db.add(pdf_page)
             db.flush()
@@ -301,8 +371,8 @@ def segment_problems(text: str, page_num: int) -> list[dict]:
     """
     Сегментация страницы на задачи по нормализованному тексту.
     
-    Поддерживаются разные типы разметки внутри одного учебника:
-    задача, упражнение, задание, контрольное/практическое задание, вопрос, параграф, §, N. / N) и т.д.
+    Поддерживаются: Задача (N), Упражнение N, Задание, Вопрос, Exercise N, № N, N. / N).
+    PR2: § N и Параграф N — не начало задачи; только границы раздела/теории (см. extract_and_save_section_theory).
     Граница условия и решения: строка «Решение.» — условие до неё, решение после неё до следующей задачи.
     
     Returns list of dicts: number, text (условие), solution_text (если есть), confidence
@@ -325,8 +395,7 @@ def segment_problems(text: str, page_num: int) -> list[dict]:
         r"Задание\s*\(\s*(\d+)\s*\)",
         r"Задание\s+(\d+)",
         r"Задание\s*(?:№\s*)?(\d+)",
-        r"§\s*(\d+(?:\.\d+)?)",
-        r"Параграф\s*(\d+)",
+        # PR2: § and Параграф are NOT problem starts — only section/theory boundaries (see RE_SECTION_HEADER in extract_and_save_section_theory)
         r"Exercise\s+(\d+)",   # английские учебники
         r"№\s*(\d+(?:\.\d+)?)",
         r"^(\d+)\.\s+",        # 1. Текст
@@ -552,6 +621,21 @@ def run_llm_normalize_only(pdf_source_id: int) -> dict:
     total = len(page_texts)
     print(f"   📄 LLM-нормализация источника {pdf_source_id}: {total} страниц (без перезапуска OCR)")
 
+    # Детерминированная коррекция формул до LLM (PR8)
+    try:
+        from formula_processor import post_process_ocr
+        page_texts = [post_process_ocr(t or "") for t in page_texts]
+    except Exception:
+        pass
+
+    # Оценка качества для gating (PR8): только низкокачественные страницы в LLM
+    quality_scores = None
+    try:
+        from ocr_cleaner import calculate_quality_score
+        quality_scores = [calculate_quality_score(t or "").get("score", 50) for t in page_texts]
+    except Exception:
+        pass
+
     checkpoint_path = get_llm_checkpoint_path(book_id, pdf_source_id)
     redis_conn = None
     try:
@@ -594,6 +678,8 @@ def run_llm_normalize_only(pdf_source_id: int) -> dict:
             checkpoint_path=checkpoint_path,
             progress_callback=progress_callback,
             cancel_check=cancel_check,
+            quality_scores=quality_scores,
+            llm_gate_threshold=70.0,
         )
     except LLMCancelRequested:
         if redis_conn:
@@ -649,9 +735,22 @@ def import_from_normalized_file(pdf_source_id: int) -> dict:
         db.flush()
 
         book_id = pdf_source.book_id
-        problems_found = 0
+
+        # PR3: build doc_map first; PR4: use for tasks-span problems and paragraph-span theory
+        doc_map = None
+        try:
+            from document_map import build as build_doc_map
+            from pipeline.artifacts import save_doc_map
+            doc_map = build_doc_map(pages_data, book_id, pdf_source_id)
+            artifacts_dir = Path(os.environ.get("ARTIFACTS_DIR", "artifacts")) / str(book_id) / str(pdf_source_id)
+            save_doc_map(doc_map, artifacts_dir / "doc_map.json")
+        except Exception as doc_map_err:
+            print(f"   ⚠️ doc_map build/save skipped: {doc_map_err}")
+
+        # Create pdf_pages and page_num_1based -> id map
+        page_num_to_id: dict[int, int] = {}
         for page_num_1based, text in pages_data:
-            page_num = page_num_1based - 1  # в БД page_num 0-based
+            page_num = page_num_1based - 1
             pdf_page = PdfPage(
                 pdf_source_id=pdf_source_id,
                 page_num=page_num,
@@ -660,22 +759,99 @@ def import_from_normalized_file(pdf_source_id: int) -> dict:
             )
             db.add(pdf_page)
             db.flush()
-            problems = segment_problems(text, page_num)
-            for prob in problems:
-                problem = Problem(
-                    book_id=book_id,
-                    source_page_id=pdf_page.id,
-                    number=prob.get("number"),
-                    section=prob.get("section"),
-                    problem_text=prob["text"],
-                    solution_text=prob.get("solution_text"),
-                    page_ref=f"стр. {page_num + 1}",
-                    confidence=prob.get("confidence", 50),
-                )
-                db.add(problem)
-                problems_found += 1
+            page_num_to_id[page_num_1based] = pdf_page.id
 
-        theory_count = extract_and_save_section_theory(db, book_id, pdf_source_id)
+        # PR4: problems from tasks-span only when doc_map has tasks ranges; else legacy per-page
+        problems_found = 0
+        try:
+            from document_map import get_tasks_page_ranges
+            from segmentation.problems import extract_problems_from_pages
+            tasks_ranges = get_tasks_page_ranges(doc_map) if doc_map else None
+            if tasks_ranges:
+                extracted = extract_problems_from_pages(pages_data, doc_map, book_id)
+                for prob in extracted:
+                    page_1 = prob.get("page_num_1based")
+                    source_page_id = page_num_to_id.get(page_1) if page_1 else None
+                    if not source_page_id:
+                        source_page_id = next(iter(page_num_to_id.values()), None)
+                    problem = Problem(
+                        book_id=book_id,
+                        source_page_id=source_page_id,
+                        number=prob.get("number"),
+                        section=prob.get("section"),
+                        problem_text=prob.get("text", ""),
+                        solution_text=prob.get("solution_text"),
+                        page_ref=prob.get("page_ref", f"стр. {page_1}" if page_1 else None),
+                        confidence=prob.get("confidence", 50),
+                    )
+                    db.add(problem)
+                    problems_found += 1
+            else:
+                for page_num_1based, text in pages_data:
+                    pdf_page_id = page_num_to_id.get(page_num_1based)
+                    if not pdf_page_id:
+                        continue
+                    page_num = page_num_1based - 1
+                    problems = segment_problems(text, page_num)
+                    for prob in problems:
+                        problem = Problem(
+                            book_id=book_id,
+                            source_page_id=pdf_page_id,
+                            number=prob.get("number"),
+                            section=prob.get("section"),
+                            problem_text=prob["text"],
+                            solution_text=prob.get("solution_text"),
+                            page_ref=f"стр. {page_num + 1}",
+                            confidence=prob.get("confidence", 50),
+                        )
+                        db.add(problem)
+                        problems_found += 1
+        except Exception:
+            for page_num_1based, text in pages_data:
+                pdf_page_id = page_num_to_id.get(page_num_1based)
+                if not pdf_page_id:
+                    continue
+                page_num = page_num_1based - 1
+                problems = segment_problems(text, page_num)
+                for prob in problems:
+                    problem = Problem(
+                        book_id=book_id,
+                        source_page_id=pdf_page_id,
+                        number=prob.get("number"),
+                        section=prob.get("section"),
+                        problem_text=prob["text"],
+                        solution_text=prob.get("solution_text"),
+                        page_ref=f"стр. {page_num + 1}",
+                        confidence=prob.get("confidence", 50),
+                    )
+                    db.add(problem)
+                    problems_found += 1
+
+        # PR4: theory from paragraph spans when doc_map has them; else legacy
+        theory_count = None
+        try:
+            from segmentation.theory import extract_and_save_section_theory_from_doc_map
+            theory_count = extract_and_save_section_theory_from_doc_map(
+                db, book_id, pdf_source_id, pages_data, doc_map,
+            )
+        except Exception:
+            pass
+        if theory_count is None:
+            theory_count = extract_and_save_section_theory(db, book_id, pdf_source_id)
+
+        # PR5: link answers from doc_map answers span when present
+        try:
+            from document_map import get_answers_page_range
+            from segmentation.answers import extract_answers_from_pages, link_answers_to_problems
+            if doc_map and get_answers_page_range(doc_map):
+                answers_list = extract_answers_from_pages(pages_data, doc_map)
+                if answers_list:
+                    up, _nf = link_answers_to_problems(db, book_id, answers_list)
+                    if up:
+                        print(f"   📎 Answers linked: {up} problems")
+        except Exception as ans_err:
+            print(f"   ⚠️ Answers link skipped: {ans_err}")
+
         pdf_source.status = "done"
         db.commit()
         print(f"   ✅ Import from normalized file: {len(pages_data)} pages, {problems_found} problems")
@@ -748,9 +924,23 @@ def import_from_normalized_file_llm(pdf_source_id: int) -> dict:
 
         from llm_distribute import distribute_batches, ImportDBCancelRequested, normalize_parsed_blocks, block_looks_like_theory
         try:
-            parsed = distribute_batches(pages_data, subject, progress_callback=progress, cancel_check=cancel_check)
+            from llm.structured import LLMStructuredError
+        except ImportError:
+            LLMStructuredError = Exception  # type: ignore[misc, assignment]
+        try:
+            parsed = distribute_batches(
+                pages_data, subject,
+                progress_callback=progress, cancel_check=cancel_check,
+                book_id=book_id, pdf_source_id=pdf_source_id,
+            )
         except ImportDBCancelRequested:
             return {"status": "cancelled", "message": "Распределение по БД остановлено пользователем."}
+        except LLMStructuredError as e:
+            return {
+                "status": "error",
+                "message": str(e),
+                "raw_persisted_path": str(e.persisted_path) if getattr(e, "persisted_path", None) else None,
+            }
         if not parsed:
             return {"status": "error", "message": "LLM не вернул блоки (проверь OPENAI_API_KEY и формат ответа)"}
 
@@ -780,6 +970,16 @@ def import_from_normalized_file_llm(pdf_source_id: int) -> dict:
             db.add(pdf_page)
             db.flush()
             page_num_to_id[page_num_1based] = pdf_page.id
+
+        # PR3: build and persist doc_map
+        try:
+            from document_map import build
+            from pipeline.artifacts import save_doc_map
+            doc_map = build(pages_data, book_id, pdf_source_id)
+            artifacts_dir = Path(os.environ.get("ARTIFACTS_DIR", "artifacts")) / str(book_id) / str(pdf_source_id)
+            save_doc_map(doc_map, artifacts_dir / "doc_map.json")
+        except Exception as doc_map_err:
+            print(f"   ⚠️ doc_map build/save skipped: {doc_map_err}")
 
         # Теория: объединяем блоки по section (в т.ч. после переклассификации)
         theory_by_section: dict[str, list[str]] = {}
@@ -928,33 +1128,110 @@ def reanalyze_pdf_source(pdf_source_id: int) -> dict:
         if not pages:
             return {"status": "skipped", "message": "No pages with ocr_text", "problems_found": 0}
 
-        total_problems = 0
-        for i, page in enumerate(pages):
-            # Удалить старые задачи этой страницы
-            db.query(Problem).filter(Problem.source_page_id == page.id).delete()
-            # Заново сегментировать по нормализованному тексту
-            problems = segment_problems(page.ocr_text or "", page.page_num)
-            for prob in problems:
-                problem = Problem(
-                    book_id=pdf_source.book_id,
-                    source_page_id=page.id,
-                    number=prob.get("number"),
-                    section=prob.get("section"),
-                    problem_text=prob["text"],
-                    solution_text=prob.get("solution_text"),
-                    page_ref=f"стр. {page.page_num + 1}",
-                    confidence=prob.get("confidence", 50),
-                )
-                db.add(problem)
-                total_problems += 1
-            if (i + 1) % 50 == 0:
-                db.commit()
-                print(f"   📃 Reanalyzed {i + 1}/{len(pages)} pages, {total_problems} problems")
+        pages_data = [(p.page_num + 1, p.ocr_text or "") for p in pages]
+        page_num_to_id = {p.page_num + 1: p.id for p in pages}
+        book_id = pdf_source.book_id
 
-        # Обновить теоретический материал по параграфам
-        theory_count = extract_and_save_section_theory(db, pdf_source.book_id, pdf_source_id)
+        # PR3: build doc_map; PR4: use for tasks-span problems and paragraph-span theory
+        doc_map = None
+        try:
+            from document_map import build as build_doc_map
+            from pipeline.artifacts import save_doc_map
+            doc_map = build_doc_map(pages_data, book_id, pdf_source_id)
+            artifacts_dir = Path(os.environ.get("ARTIFACTS_DIR", "artifacts")) / str(book_id) / str(pdf_source_id)
+            save_doc_map(doc_map, artifacts_dir / "doc_map.json")
+        except Exception as doc_map_err:
+            print(f"   ⚠️ doc_map build/save skipped: {doc_map_err}")
+
+        # Удалить все старые задачи этого источника
+        for page in pages:
+            db.query(Problem).filter(Problem.source_page_id == page.id).delete()
+        db.flush()
+
+        total_problems = 0
+        try:
+            from document_map import get_tasks_page_ranges
+            from segmentation.problems import extract_problems_from_pages
+            tasks_ranges = get_tasks_page_ranges(doc_map) if doc_map else None
+            if tasks_ranges:
+                extracted = extract_problems_from_pages(pages_data, doc_map, book_id)
+                for prob in extracted:
+                    page_1 = prob.get("page_num_1based")
+                    source_page_id = page_num_to_id.get(page_1) if page_1 else None
+                    if not source_page_id:
+                        source_page_id = next(iter(page_num_to_id.values()), None)
+                    problem = Problem(
+                        book_id=book_id,
+                        source_page_id=source_page_id,
+                        number=prob.get("number"),
+                        section=prob.get("section"),
+                        problem_text=prob.get("text", ""),
+                        solution_text=prob.get("solution_text"),
+                        page_ref=prob.get("page_ref", f"стр. {page_1}" if page_1 else None),
+                        confidence=prob.get("confidence", 50),
+                    )
+                    db.add(problem)
+                    total_problems += 1
+            else:
+                for page in pages:
+                    problems = segment_problems(page.ocr_text or "", page.page_num)
+                    for prob in problems:
+                        problem = Problem(
+                            book_id=book_id,
+                            source_page_id=page.id,
+                            number=prob.get("number"),
+                            section=prob.get("section"),
+                            problem_text=prob["text"],
+                            solution_text=prob.get("solution_text"),
+                            page_ref=f"стр. {page.page_num + 1}",
+                            confidence=prob.get("confidence", 50),
+                        )
+                        db.add(problem)
+                        total_problems += 1
+        except Exception:
+            total_problems = 0
+            for page in pages:
+                problems = segment_problems(page.ocr_text or "", page.page_num)
+                for prob in problems:
+                    problem = Problem(
+                        book_id=book_id,
+                        source_page_id=page.id,
+                        number=prob.get("number"),
+                        section=prob.get("section"),
+                        problem_text=prob["text"],
+                        solution_text=prob.get("solution_text"),
+                        page_ref=f"стр. {page.page_num + 1}",
+                        confidence=prob.get("confidence", 50),
+                    )
+                    db.add(problem)
+                    total_problems += 1
+
+        # PR4: theory from paragraph spans when doc_map has them; else legacy
+        theory_count = None
+        try:
+            from segmentation.theory import extract_and_save_section_theory_from_doc_map
+            theory_count = extract_and_save_section_theory_from_doc_map(
+                db, book_id, pdf_source_id, pages_data, doc_map,
+            )
+        except Exception:
+            pass
+        if theory_count is None:
+            theory_count = extract_and_save_section_theory(db, book_id, pdf_source_id)
         if theory_count is not None:
             print(f"   📖 Section theory: {theory_count} paragraphs updated")
+
+        # PR5: link answers from doc_map answers span when present
+        try:
+            from document_map import get_answers_page_range
+            from segmentation.answers import extract_answers_from_pages, link_answers_to_problems
+            if doc_map and get_answers_page_range(doc_map):
+                answers_list = extract_answers_from_pages(pages_data, doc_map)
+                if answers_list:
+                    up, _nf = link_answers_to_problems(db, book_id, answers_list)
+                    if up:
+                        print(f"   📎 Answers linked: {up} problems")
+        except Exception as ans_err:
+            print(f"   ⚠️ Answers link skipped: {ans_err}")
 
         db.commit()
         print(f"   ✅ Reanalyze done: {len(pages)} pages, {total_problems} problems")
