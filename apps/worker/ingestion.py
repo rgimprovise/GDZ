@@ -118,14 +118,21 @@ def process_pdf_source(pdf_source_id: int, local_pdf_path: Optional[str] = None)
             pdf_source.error_message = f"PDF file not found: {pdf_path}"
             db.commit()
             return {"status": "error", "message": f"PDF not found: {pdf_path}"}
-        
-        print(f"   📂 Loading from: {pdf_path}")
-        
+
+        # Если в той же папке есть файл с припиской ocr в названии (например имя_ocr.pdf) —
+        # используем его и извлекаем встроенный текст без Tesseract (кликабельный PDF).
+        path_for_processing = _resolve_pdf_path_with_ocr_variant(Path(pdf_path))
+        use_embedded_text = "ocr" in path_for_processing.name.lower()
+
+        print(f"   📂 Loading from: {path_for_processing}")
+        if use_embedded_text:
+            print(f"   📄 Режим: извлечение встроенного текста (файл с «ocr» в имени), без Tesseract")
+
         # Process PDF
         if not HAS_PYMUPDF:
             return {"status": "error", "message": "pymupdf not installed"}
-        
-        doc = fitz.open(str(pdf_path))
+
+        doc = fitz.open(str(path_for_processing))
         page_count = len(doc)
         pdf_source.page_count = page_count
         
@@ -141,33 +148,41 @@ def process_pdf_source(pdf_source_id: int, local_pdf_path: Optional[str] = None)
         db.commit()
         book_id = pdf_source.book_id
         
-        # —— 1. OCR по всем страницам (Tesseract), сырой текст в память и в файл ——
+        # —— 1. Текст страниц: встроенный (get_text) или OCR (Tesseract) ——
         raw_texts = []
         ocr_confidences = []
-        model_used = "tesseract"
+        model_used = "embedded" if use_embedded_text else "tesseract"
         raw_path = norm_path = None
-        if HAS_TESSERACT:
-            print(f"   📷 OCR: Tesseract (rus+eng)")
-        
-        for page_num in range(page_count):
-            page = doc[page_num]
-            pix = page.get_pixmap(dpi=150)
-            img_data = pix.tobytes("png")
-            img = Image.open(io.BytesIO(img_data))
-            text = ""
-            conf = 70
+
+        if use_embedded_text:
+            for page_num in range(page_count):
+                page = doc[page_num]
+                text = page.get_text(sort=True) or ""
+                raw_texts.append(text)
+                ocr_confidences.append(95)
+                if (page_num + 1) % 25 == 0 or page_num == page_count - 1:
+                    print(f"   📃 Извлечение текста: {page_num + 1}/{page_count} страниц")
+        else:
             if HAS_TESSERACT:
-                try:
-                    text = pytesseract.image_to_string(img, lang="rus+eng")
-                except Exception as e:
-                    if page_num == 0:
-                        print(f"   ⚠️  OCR failed for page {page_num}: {e}")
-            raw_texts.append(text or "")
-            ocr_confidences.append(conf)
-            # Прогресс OCR каждые 25 страниц
-            if (page_num + 1) % 25 == 0 or page_num == page_count - 1:
-                print(f"   📃 OCR: {page_num + 1}/{page_count} pages")
-        
+                print(f"   📷 OCR: Tesseract (rus+eng)")
+            for page_num in range(page_count):
+                page = doc[page_num]
+                pix = page.get_pixmap(dpi=150)
+                img_data = pix.tobytes("png")
+                img = Image.open(io.BytesIO(img_data))
+                text = ""
+                conf = 70
+                if HAS_TESSERACT:
+                    try:
+                        text = pytesseract.image_to_string(img, lang="rus+eng")
+                    except Exception as e:
+                        if page_num == 0:
+                            print(f"   ⚠️  OCR failed for page {page_num}: {e}")
+                raw_texts.append(text or "")
+                ocr_confidences.append(conf)
+                if (page_num + 1) % 25 == 0 or page_num == page_count - 1:
+                    print(f"   📃 OCR: {page_num + 1}/{page_count} pages")
+
         doc.close()
         
         # Запись сырого OCR в файл
@@ -264,12 +279,10 @@ def process_pdf_source(pdf_source_id: int, local_pdf_path: Optional[str] = None)
         
     except Exception as e:
         print(f"   ❌ Error: {e}")
-        
-        if pdf_source:
+        if pdf_source is not None:
             pdf_source.status = "failed"
             pdf_source.error_message = str(e)
             db.commit()
-        
         return {"status": "error", "message": str(e)}
     
     finally:
@@ -708,6 +721,8 @@ def import_from_normalized_file_llm(pdf_source_id: int) -> dict:
         pages_data = read_normalized_pages(book_id, pdf_source_id)
         if not pages_data:
             return {"status": "error", "message": "No pages in normalized file or parse error"}
+        from ocr_files import strip_headers_footers_from_pages
+        pages_data = strip_headers_footers_from_pages(pages_data)
 
         def progress(batch_idx: int, total: int) -> None:
             print(f"   📦 Распределение LLM: батч {batch_idx}/{total}")
@@ -731,13 +746,18 @@ def import_from_normalized_file_llm(pdf_source_id: int) -> dict:
                 pass
             return False
 
-        from llm_distribute import distribute_batches, ImportDBCancelRequested
+        from llm_distribute import distribute_batches, ImportDBCancelRequested, normalize_parsed_blocks, block_looks_like_theory
         try:
             parsed = distribute_batches(pages_data, subject, progress_callback=progress, cancel_check=cancel_check)
         except ImportDBCancelRequested:
             return {"status": "cancelled", "message": "Распределение по БД остановлено пользователем."}
         if not parsed:
             return {"status": "error", "message": "LLM не вернул блоки (проверь OPENAI_API_KEY и формат ответа)"}
+
+        parsed = normalize_parsed_blocks(parsed)
+        theory_count_raw = sum(1 for b in parsed if (b.get("type") or "").lower() in ("section_theory", "theory"))
+        problem_count_raw = sum(1 for b in parsed if (b.get("type") or "").lower() == "problem")
+        print(f"   📊 После постобработки: теория {theory_count_raw} блоков, задач {problem_count_raw} блоков")
 
         # Полная перезапись: удаляем старые данные по источнику и теорию по книге
         existing_pages = db.query(PdfPage).filter(PdfPage.pdf_source_id == pdf_source_id).all()
@@ -761,18 +781,19 @@ def import_from_normalized_file_llm(pdf_source_id: int) -> dict:
             db.flush()
             page_num_to_id[page_num_1based] = pdf_page.id
 
-        # Теория: объединяем блоки по section
+        # Теория: объединяем блоки по section (в т.ч. после переклассификации)
         theory_by_section: dict[str, list[str]] = {}
         for b in parsed:
             t = (b.get("type") or "").lower()
             if t not in ("section_theory", "theory"):
                 continue
-            sec = (b.get("section") or "").strip() or None
-            if not sec:
-                continue
             theory_text = (b.get("theory_text") or "").strip()
             if not theory_text:
                 continue
+            sec = (b.get("section") or "").strip() or None
+            if not sec:
+                m = re.match(r"^\s*(\d+)[\.\)]\s+", theory_text)
+                sec = f"§{m.group(1)}" if m else "§?"
             if not sec.startswith("§"):
                 sec = f"§{sec.lstrip()}"
             if sec not in theory_by_section:
@@ -803,6 +824,8 @@ def import_from_normalized_file_llm(pdf_source_id: int) -> dict:
                 continue
             problem_text = (b.get("problem_text") or "").strip()
             if not problem_text:
+                continue
+            if block_looks_like_theory(b):
                 continue
             page_num_1 = b.get("_page_num") or 1
             source_page_id = page_num_to_id.get(page_num_1)

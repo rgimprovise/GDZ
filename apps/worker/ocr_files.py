@@ -72,6 +72,44 @@ def write_normalized_md(book_id: int, pdf_source_id: int, page_texts: list[str])
     return path
 
 
+# Паттерны колонтитулов (header/footer), попадающих в OCR с верстки учебника.
+# Типично: "N класс", "82 8 класс", номер страницы, короткие артефакты.
+RE_HEADER_CLASS = re.compile(r"^\s*[\d\s]*\d+\s*класс\s*$", re.IGNORECASE)
+RE_PAGE_NUMBER_ONLY = re.compile(r"^\s*\d+\s*$")
+RE_HEADER_ARTIFACT = re.compile(r"^\s*[\d\s]{1,15}\s*$")  # только цифры/пробелы, короткая строка
+
+
+def strip_page_headers_footers(text: str) -> str:
+    """
+    Удалить из текста страницы типичные колонтитулы (header/footer), которые
+    попадают в OCR из верстки учебника (например «N класс», номер страницы).
+    Не меняет основной текст параграфа и задач.
+    """
+    if not (text or "").strip():
+        return text or ""
+    lines = []
+    for line in (text or "").split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            lines.append(line)
+            continue
+        if RE_HEADER_CLASS.match(stripped):
+            continue
+        if RE_PAGE_NUMBER_ONLY.match(stripped):
+            continue
+        if len(stripped) <= 15 and RE_HEADER_ARTIFACT.match(stripped):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def strip_headers_footers_from_pages(
+    pages_data: list[tuple[int, str]],
+) -> list[tuple[int, str]]:
+    """Применить strip_page_headers_footers к тексту каждой страницы."""
+    return [(page_num, strip_page_headers_footers(text)) for page_num, text in pages_data]
+
+
 def parse_md_by_pages(content: str) -> list[tuple[int, str]]:
     """
     Разобрать .md по блокам ## Страница N.

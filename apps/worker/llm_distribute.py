@@ -51,6 +51,66 @@ def _looks_like_theory_header(line: str) -> bool:
     if TASK_KEYWORDS.search(line):
         return False
     return bool(RE_NUMBERED_HEADING.match(line.strip()))
+
+
+def block_looks_like_theory(block: dict) -> bool:
+    """
+    Эвристика: блок с type=problem на самом деле теория (подпункт параграфа).
+    Используется при постобработке в ingestion, чтобы не писать теорию в problems
+    и не терять теорию, помеченную LLM как other.
+    """
+    text = (block.get("problem_text") or block.get("theory_text") or "").strip()
+    if not text or len(text) < 15:
+        return False
+    if TASK_KEYWORDS.search(text[:500]):
+        return False
+    first_line = text.split("\n")[0].strip()
+    if RE_NUMBERED_HEADING.match(first_line) and len(first_line) <= 150:
+        return True
+    if re.match(r"^\s*\d+[\.\)]\s+[А-ЯA-Z]", text[:250], re.IGNORECASE):
+        return True
+    return False
+
+
+def normalize_parsed_blocks(parsed: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Постобработка ответа LLM: переклассифицировать блоки, где теория попала в problem,
+    и подставить theory_text для блоков теории без него.
+    """
+    result = []
+    for b in list(parsed):
+        b = dict(b)
+        t = (b.get("type") or "").lower()
+        problem_text = (b.get("problem_text") or "").strip()
+        theory_text = (b.get("theory_text") or "").strip()
+
+        if t == "problem" and problem_text and block_looks_like_theory(b):
+            b["type"] = "theory"
+            b["theory_text"] = problem_text
+            b["problem_text"] = None
+            b["number"] = None
+            if not (b.get("section") or "").strip():
+                m = re.match(r"^\s*(\d+)[\.\)]\s+", theory_text or problem_text)
+                if m:
+                    b["section"] = f"§{m.group(1)}"
+        elif t in ("section_theory", "theory") and theory_text and not problem_text:
+            pass
+        elif t in ("section_theory", "theory") and not theory_text and problem_text and block_looks_like_theory(b):
+            b["theory_text"] = problem_text
+            b["problem_text"] = None
+        elif t not in ("section_theory", "theory", "problem", "solution_only", "answers_block") and theory_text and block_looks_like_theory(b):
+            b["type"] = "theory"
+            b["theory_text"] = theory_text or (b.get("problem_text") or "").strip()
+            b["problem_text"] = None
+            b["number"] = None
+            if not (b.get("section") or "").strip():
+                m = re.match(r"^\s*(\d+)[\.\)]\s+", b["theory_text"])
+                if m:
+                    b["section"] = f"§{m.group(1)}"
+        result.append(b)
+    return result
+
+
 RE_TASK_BLOCK_START = re.compile(
     r"^\s*(?:Задачи|Упражнения|Вопросы\s+к\s+параграфу|Контрольные\s+задания|Практические\s+задания)\s*[.:]?",
     re.IGNORECASE,
@@ -90,6 +150,7 @@ SYSTEM_PROMPT = """Ты — эксперт по разметке учебник�
 - block_id — номер блока из запроса.
 - Оглавление vs теория: по структуре и содержанию (список коротких заголовков без связного текста = оглавление).
 - number — только для явных задач; не для пунктов параграфа.
+- Для блоков theory и section_theory обязательно заполни theory_text и section (§N); иначе теория не попадёт в БД.
 - solution_only: только solution_text или answer_text не null.
 - answers_block: только "answers" не null; number в каждом элементе — номер задачи для сопоставления с БД.
 - Не придумывай текст; неразборчиво — type: "other", остальное null.
@@ -109,7 +170,7 @@ PARAGRAPH_SYSTEM_PROMPT = """Ты — эксперт по разметке уч�
 Типы блоков: section_theory, theory, problem, solution_only, answers_block, other. Формат ответа — только валидный JSON:
 {"blocks": [{"block_id": 1, "type": "...", "section": "§N", "number": "315" или null, "theory_text": "..." или null, "problem_text": "..." или null, "solution_text": "..." или null, "answer_text": "..." или null, "parts": null или [...], "answers": null или [...]}]}
 
-Правила: block_id — порядковый номер блока (1, 2, 3, ...). section — номер параграфа из запроса (например §1). theory_text — для теории, problem_text — только для явных задач. solution_only — блок «Решение.» привязать к предыдущей задаче. Не помещай теоретический текст в problem_text."""
+Правила: block_id — порядковый номер блока (1, 2, 3, ...). section — номер параграфа из запроса (например §1). Для блоков типа theory или section_theory обязательно заполни theory_text текстом блока; section укажи (§N). theory_text — для теории, problem_text — только для явных задач. solution_only — блок «Решение.» привязать к предыдущей задаче. Не помещай теоретический текст в problem_text."""
 
 
 @dataclass
