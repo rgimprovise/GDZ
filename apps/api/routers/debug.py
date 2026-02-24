@@ -22,7 +22,7 @@ from sqlalchemy import text, func
 from sqlalchemy.exc import ProgrammingError
 
 from database import get_db
-from models import Book, PdfSource, PdfPage, Query, User
+from models import Book, PdfSource, PdfPage, Problem, SectionTheory, Query, User
 from config import get_settings
 from job_queue import enqueue_ingestion, enqueue_llm_normalize, enqueue_import_from_normalized
 
@@ -231,12 +231,22 @@ DASHBOARD_HTML = """
                     <div class="h-10 bg-gray-200 rounded mb-2"></div>
                 </div>
             </div>
+            <div class="mt-4 pt-4 border-t border-gray-200">
+                <p class="text-sm text-gray-500 mb-2">Очистка данных: удаляются задачи, страницы, записи в БД и файлы (PDF, ocr_raw, ocr_normalized, page_images).</p>
+                <form hx-post="/debug/api/clear-all-pdf-data" hx-target="#clear-all-result" hx-swap="innerHTML" hx-indicator="#clear-all-indicator"
+                      hx-confirm="Удалить ВСЕ загруженные PDF, страницы, задачи и теорию в БД? Книги останутся. Действие необратимо.">
+                    <input type="hidden" name="confirm" value="yes">
+                    <button type="submit" class="px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700">Очистить все данные PDF и БД</button>
+                    <span id="clear-all-indicator" class="htmx-indicator ml-2">...</span>
+                </form>
+                <div id="clear-all-result" class="mt-2"></div>
+            </div>
         </div>
 
         <!-- Books List -->
         <div class="bg-white rounded-lg shadow mb-8 p-6">
             <h2 class="text-xl font-semibold mb-4">📚 Книги в базе</h2>
-            <div id="books-list" hx-get="/debug/api/books" hx-trigger="load" hx-swap="innerHTML">
+            <div id="books-list" hx-get="/debug/api/books" hx-trigger="load, refreshBooks from:body" hx-swap="innerHTML">
                 <div class="animate-pulse">
                     <div class="h-10 bg-gray-200 rounded mb-2"></div>
                     <div class="h-10 bg-gray-200 rounded mb-2"></div>
@@ -726,7 +736,10 @@ def list_pdf_sources(db: Session = Depends(get_db)):
                 class="px-3 py-1 bg-gray-400 text-white rounded text-xs hover:bg-gray-500 ml-1">Остановить</button>
                 <span id="import-db-indicator-{row.id}" class="htmx-indicator ml-1">...</span>
                 <span id="import-db-result-{row.id}"></span>"""
-        btn = (start_ocr_btn + " " + llm_btn + " " + import_db_btn).strip() if (start_ocr_btn or llm_btn or import_db_btn) else "<span class='text-gray-400'>—</span>"
+        clear_btn = f"""<button type="button" hx-post="/debug/api/clear-pdf-source/{row.id}" hx-target="#clear-result-{row.id}" hx-swap="innerHTML" hx-confirm="Удалить этот источник (задачи, страницы, файлы PDF/OCR)?"
+                class="px-3 py-1 bg-red-500 text-white rounded text-xs hover:bg-red-600 ml-1">Очистить</button>
+                <span id="clear-result-{row.id}"></span>"""
+        btn = (start_ocr_btn + " " + llm_btn + " " + import_db_btn + " " + clear_btn).strip() if (start_ocr_btn or llm_btn or import_db_btn or clear_btn) else "<span class='text-gray-400'>—</span>"
         html += f"""
         <tr class="border-b hover:bg-gray-50">
             <td class="px-3 py-2">{row.id}</td>
@@ -889,6 +902,137 @@ def run_import_db(pdf_source_id: int, db: Session = Depends(get_db)):
         job_id = enqueue_import_from_normalized(pdf_source_id)
         return f"<span class='text-green-600'>В очереди (job {job_id[:8]}…)</span>"
     except Exception as e:
+        return f"<span class='text-red-500'>{e}</span>"
+
+
+def _clear_pdf_source_files(data_dir: Path, book_id: int, pdf_source_id: int, minio_key: Optional[str]) -> list:
+    """Удалить файлы одного источника: PDF, ocr_raw, ocr_normalized, page_images. Возвращает список удалённых путей."""
+    removed = []
+    if minio_key:
+        pdf_path = data_dir / minio_key.strip().lstrip("/")
+        if pdf_path.exists() and pdf_path.is_file():
+            try:
+                pdf_path.unlink()
+                removed.append(str(pdf_path))
+            except Exception:
+                pass
+    ocr_raw_dir = data_dir / "ocr_raw" / str(book_id)
+    if ocr_raw_dir.exists():
+        for f in ocr_raw_dir.glob(f"{pdf_source_id}_*"):
+            if f.is_file():
+                try:
+                    f.unlink()
+                    removed.append(str(f))
+                except Exception:
+                    pass
+    norm_file = data_dir / "ocr_normalized" / str(book_id) / f"{pdf_source_id}.md"
+    if norm_file.exists():
+        try:
+            norm_file.unlink()
+            removed.append(str(norm_file))
+        except Exception:
+            pass
+    checkpoint_file = data_dir / "ocr_normalized" / str(book_id) / f"{pdf_source_id}.llm_checkpoint.json"
+    if checkpoint_file.exists():
+        try:
+            checkpoint_file.unlink()
+            removed.append(str(checkpoint_file))
+        except Exception:
+            pass
+    page_images_dir = data_dir / "page_images" / str(book_id) / str(pdf_source_id)
+    if page_images_dir.exists():
+        for f in page_images_dir.iterdir():
+            if f.is_file():
+                try:
+                    f.unlink()
+                    removed.append(str(f))
+                except Exception:
+                    pass
+        try:
+            page_images_dir.rmdir()
+        except Exception:
+            pass
+    return removed
+
+
+@router.post("/api/clear-pdf-source/{pdf_source_id}", response_class=HTMLResponse)
+def clear_pdf_source(pdf_source_id: int, db: Session = Depends(get_db)):
+    """Очистить один источник: задачи и страницы в БД, запись pdf_sources, файлы (PDF, ocr_raw, ocr_normalized, page_images)."""
+    try:
+        ps = db.query(PdfSource).filter(PdfSource.id == pdf_source_id).first()
+        if not ps:
+            return "<span class='text-red-500'>Источник не найден</span>"
+        book_id = ps.book_id
+        minio_key = ps.minio_key
+        page_ids = [p.id for p in ps.pages]
+        db.query(Problem).filter(Problem.source_page_id.in_(page_ids)).delete(synchronize_session=False)
+        db.query(PdfPage).filter(PdfPage.pdf_source_id == pdf_source_id).delete(synchronize_session=False)
+        db.delete(ps)
+        data_dir = Path(settings.data_dir)
+        removed_files = _clear_pdf_source_files(data_dir, book_id, pdf_source_id, minio_key)
+        db.commit()
+        msg = f"<span class='text-green-600'>Источник {pdf_source_id} удалён. Файлов: {len(removed_files)}.</span>"
+        return HTMLResponse(content=msg, headers={"HX-Trigger": "refreshPdfSources"})
+    except Exception as e:
+        db.rollback()
+        return f"<span class='text-red-500'>{e}</span>"
+
+
+@router.post("/api/clear-all-pdf-data", response_class=HTMLResponse)
+def clear_all_pdf_data(
+    confirm: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Очистить все загруженные PDF и данные в БД: pdf_sources, pdf_pages, problems, section_theory; файлы в data/pdfs, ocr_raw, ocr_normalized, page_images. Передайте confirm=yes для выполнения."""
+    if confirm != "yes":
+        return "<span class='text-amber-600'>Для очистки всех данных передайте confirm=yes (кнопка «Очистить всё» с подтверждением).</span>"
+    try:
+        db.query(Problem).delete(synchronize_session=False)
+        db.query(PdfPage).delete(synchronize_session=False)
+        db.query(PdfSource).delete(synchronize_session=False)
+        db.query(SectionTheory).delete(synchronize_session=False)
+        data_dir = Path(settings.data_dir)
+        count = 0
+        for d in ["pdfs", "ocr_raw", "ocr_normalized", "page_images"]:
+            base = data_dir / d
+            if not base.exists():
+                continue
+            for item in base.iterdir():
+                if item.is_dir():
+                    for sub in item.iterdir():
+                        if sub.is_dir():
+                            for f in sub.iterdir():
+                                if f.is_file():
+                                    try:
+                                        f.unlink()
+                                        count += 1
+                                    except Exception:
+                                        pass
+                            try:
+                                sub.rmdir()
+                            except Exception:
+                                pass
+                        elif sub.is_file():
+                            try:
+                                sub.unlink()
+                                count += 1
+                            except Exception:
+                                pass
+                    try:
+                        item.rmdir()
+                    except Exception:
+                        pass
+                elif item.is_file():
+                    try:
+                        item.unlink()
+                        count += 1
+                    except Exception:
+                        pass
+        db.commit()
+        msg = f"<span class='text-green-600'>Все данные PDF и БД очищены. Удалено файлов: {count}.</span>"
+        return HTMLResponse(content=msg, headers={"HX-Trigger": "refreshPdfSources, refreshBooks"})
+    except Exception as e:
+        db.rollback()
         return f"<span class='text-red-500'>{e}</span>"
 
 
