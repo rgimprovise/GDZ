@@ -52,16 +52,49 @@ def _get_or_create_free_plan(db: Session) -> Plan:
     return plan
 
 
+def _create_user_and_subscription(
+    db: Session,
+    tg_uid: int,
+    username: Optional[str] = None,
+    display_name: Optional[str] = None,
+    language_code: str = "ru",
+) -> User:
+    """Create a new user and their free subscription."""
+    free_plan = _get_or_create_free_plan(db)
+    user = User(
+        tg_uid=tg_uid,
+        username=username or f"user_{tg_uid}",
+        display_name=display_name or f"User {tg_uid}",
+        language_code=language_code,
+    )
+    db.add(user)
+    db.flush()
+    sub = Subscription(user_id=user.id, plan_id=free_plan.id)
+    db.add(sub)
+    db.commit()
+    db.refresh(user)
+    logger.info("Created user tg_uid=%s (id=%s) with free subscription", tg_uid, user.id)
+    return user
+
+
 def _resolve_user(
     db: Session,
     tg_user: Optional[TelegramUser],
     tg_user_id_header: Optional[str],
 ) -> User:
-    """Find the DB user from auth sources; without auth use or create guest."""
+    """Find or create DB user from Telegram auth; without auth use or create guest."""
     if tg_user:
         user = db.query(User).filter(User.tg_uid == tg_user.id).first()
         if user:
             return user
+        display_name = f"{tg_user.first_name} {tg_user.last_name or ''}".strip() or f"User {tg_user.id}"
+        return _create_user_and_subscription(
+            db,
+            tg_uid=tg_user.id,
+            username=tg_user.username,
+            display_name=display_name,
+            language_code=tg_user.language_code or "ru",
+        )
 
     if tg_user_id_header:
         try:
@@ -69,6 +102,7 @@ def _resolve_user(
             user = db.query(User).filter(User.tg_uid == tg_uid).first()
             if user:
                 return user
+            return _create_user_and_subscription(db, tg_uid=tg_uid)
         except ValueError:
             pass
 
