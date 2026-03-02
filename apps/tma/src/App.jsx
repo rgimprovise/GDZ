@@ -71,8 +71,10 @@ export default function App() {
     return <div className="loading">Loading...</div>;
   }
 
+  const isGuest = user && (user.user_id === 0 || user.display_name === "Гость");
+
   return (
-    <div className="app">
+    <div className={`app ${isGuest ? "is-guest" : ""}`}>
       {authError && (
         <div className="auth-banner">
           {authError}
@@ -103,14 +105,19 @@ export default function App() {
           <Chat conversationId={activeId} onRefresh={refresh} />
         ) : (
           <div className="empty-state">
-            <h2>TutorBot</h2>
-            <p>Задай вопрос по домашнему заданию</p>
+            <h2>Твой умный помощник по учебе</h2>
+            <p>Ответы на вопросы из учебника простым языком. Подсказки для ответа у доски.</p>
             <button className="btn-primary" onClick={handleNew}>
               Новый диалог
             </button>
           </div>
         )}
       </main>
+      {isGuest && (
+        <div className="demo-footer">
+          Демо-режим. Авторизацию подключим через бота позже.
+        </div>
+      )}
     </div>
   );
 }

@@ -62,6 +62,23 @@ body {
   z-index: 200;
 }
 
+.demo-footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 6px 12px;
+  background: var(--secondary-bg);
+  color: var(--hint);
+  font-size: 0.75rem;
+  text-align: center;
+  z-index: 50;
+}
+
+.app.is-guest .main {
+  padding-bottom: 28px;
+}
+
 .main {
   flex: 1;
   display: flex;

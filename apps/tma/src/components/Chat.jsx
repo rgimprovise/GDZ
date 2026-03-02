@@ -92,7 +92,7 @@ export default function Chat({ conversationId, onRefresh }) {
       <div className="chat-messages">
         {messages.length === 0 && !loading && (
           <div className="chat-empty">
-            Отправь вопрос, фото задания или голосовое сообщение
+            Спроси что-нибудь по учебе — текст, голос или фото задания
           </div>
         )}
         {messages.map((m) => (
@@ -131,7 +131,7 @@ export default function Chat({ conversationId, onRefresh }) {
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Введи вопрос..."
+          placeholder="Спроси что-нибудь по учебе..."
           rows={1}
           disabled={loading}
         />

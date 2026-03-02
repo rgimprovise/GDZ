@@ -28,14 +28,25 @@ async function request(path, opts = {}) {
   return res.json();
 }
 
+const GUEST_USER = {
+  user_id: 0,
+  tg_uid: 0,
+  username: null,
+  display_name: "Гость",
+  plan_type: "free",
+  daily_queries_remaining: 99,
+  monthly_queries_remaining: 999,
+};
+
 export async function authenticate() {
   const tg = window.Telegram?.WebApp;
-  const initData =
-    tg?.initData || 'user=%7B%22id%22%3A1%2C%22first_name%22%3A%22Dev%22%7D';
+  if (!tg?.initData) {
+    return Promise.resolve(GUEST_USER);
+  }
   return request("/v1/auth/telegram", {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ init_data: initData }),
+    body: JSON.stringify({ init_data: tg.initData }),
   });
 }
 

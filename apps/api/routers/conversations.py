@@ -39,7 +39,7 @@ def _resolve_user(
     tg_user: Optional[TelegramUser],
     tg_user_id_header: Optional[str],
 ) -> User:
-    """Find the DB user from auth sources, raise 401 if not found."""
+    """Find the DB user from auth sources; without auth use or create guest."""
     if tg_user:
         user = db.query(User).filter(User.tg_uid == tg_user.id).first()
         if user:
@@ -54,12 +54,25 @@ def _resolve_user(
         except ValueError:
             pass
 
-    # Fallback for local development
+    # No auth: use user id 1 if exists, else get or create guest (tg_uid=0)
     user = db.query(User).filter(User.id == 1).first()
     if user:
         return user
-
-    raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Authentication required")
+    user = db.query(User).filter(User.tg_uid == 0).first()
+    if user:
+        return user
+    # Create guest user and free subscription
+    free_plan = db.query(Plan).filter(Plan.type == "free").first()
+    if not free_plan:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "No free plan in DB")
+    user = User(tg_uid=0, username="guest", display_name="Гость", language_code="ru")
+    db.add(user)
+    db.flush()
+    sub = Subscription(user_id=user.id, plan_id=free_plan.id)
+    db.add(sub)
+    db.commit()
+    db.refresh(user)
+    return user
 
 
 def _check_limits(db: Session, user: User) -> None:
