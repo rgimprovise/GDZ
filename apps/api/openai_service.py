@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 import time
 from io import BytesIO
 from typing import Optional
@@ -93,11 +94,25 @@ def send_message_and_run(thread_id: str, user_text: str) -> tuple[str, int]:
                     reply_text += block.text.value
             break
 
+    reply_text = _clean_annotations(reply_text)
+
     tokens = 0
     if run.usage:
         tokens = run.usage.total_tokens
 
     return reply_text, tokens
+
+
+def _clean_annotations(text: str) -> str:
+    """Remove OpenAI file_search citation annotations and clean up formatting."""
+    # Remove 【...】 citation markers
+    text = re.sub(r"【[^】]*】", "", text)
+    # Remove leftover double spaces from removed annotations
+    text = re.sub(r"  +", " ", text)
+    # Normalize \( \) to $ $ and \[ \] to $$ $$
+    text = text.replace("\\(", "$").replace("\\)", "$")
+    text = text.replace("\\[", "$$").replace("\\]", "$$")
+    return text.strip()
 
 
 def _poll_run(client: OpenAI, thread_id: str, run_id: str):

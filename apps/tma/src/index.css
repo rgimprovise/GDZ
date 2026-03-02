@@ -409,10 +409,10 @@ body {
 
 /* ── Bubbles ──────────────────────────────────────── */
 .bubble {
-  max-width: 85%;
+  max-width: 90%;
   padding: 10px 14px;
   border-radius: var(--radius);
-  line-height: 1.5;
+  line-height: 1.6;
   font-size: 0.95rem;
   word-wrap: break-word;
   overflow-wrap: break-word;
@@ -430,13 +430,77 @@ body {
   background: var(--bubble-assistant);
   color: var(--bubble-assistant-text);
   border-bottom-left-radius: 4px;
+  max-width: 95%;
 }
 
-.bubble p {
-  margin: 0 0 6px;
+/* ── Assistant content typography ───────────────── */
+.bubble.assistant p {
+  margin: 0 0 8px;
 }
-.bubble p:last-child {
+.bubble.assistant p:last-child {
   margin-bottom: 0;
+}
+
+.bubble.assistant h1,
+.bubble.assistant h2,
+.bubble.assistant h3,
+.bubble.assistant h4 {
+  margin: 12px 0 6px;
+  line-height: 1.3;
+}
+.bubble.assistant h1 { font-size: 1.1rem; }
+.bubble.assistant h2 { font-size: 1.05rem; }
+.bubble.assistant h3 { font-size: 1rem; }
+
+.bubble.assistant strong {
+  font-weight: 600;
+}
+
+.bubble.assistant ol,
+.bubble.assistant ul {
+  margin: 6px 0;
+  padding-left: 1.4em;
+}
+
+.bubble.assistant li {
+  margin-bottom: 4px;
+}
+
+.bubble.assistant li > p {
+  margin: 0;
+}
+
+.bubble.assistant blockquote {
+  border-left: 3px solid var(--hint);
+  padding-left: 10px;
+  margin: 8px 0;
+  color: var(--hint);
+  font-style: italic;
+}
+
+.bubble.assistant hr {
+  border: none;
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
+  margin: 10px 0;
+}
+
+.bubble.assistant table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 0.9rem;
+  width: 100%;
+}
+
+.bubble.assistant th,
+.bubble.assistant td {
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.bubble.assistant th {
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.04);
 }
 
 .bubble pre {
@@ -450,11 +514,25 @@ body {
 
 .bubble code {
   font-size: 0.85em;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
+.bubble pre code {
+  background: none;
+  padding: 0;
+}
+
+.bubble.user p {
+  margin: 0;
 }
 
 .bubble-badge {
-  font-size: 0.8rem;
-  opacity: 0.7;
+  font-size: 0.75rem;
+  opacity: 0.6;
+  display: block;
+  margin-bottom: 2px;
 }
 
 /* ── Typing indicator ─────────────────────────────── */
@@ -571,10 +649,26 @@ body {
 
 /* ── KaTeX overrides ──────────────────────────────── */
 .katex {
-  font-size: 1em !important;
+  font-size: 1.05em !important;
 }
 
 .bubble .katex-display {
-  margin: 8px 0;
+  margin: 10px 0;
+  padding: 4px 0;
   overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+
+.bubble .katex-display > .katex {
+  text-align: left;
+}
+
+.bubble .katex .base {
+  white-space: normal;
+}
+
+.bubble .katex-error {
+  color: var(--text);
+  font-size: 0.9em;
 }
