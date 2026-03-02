@@ -58,9 +58,5 @@ services:
       - api
     restart: unless-stopped
 
-networks:
-  default:
-    name: tutorbot_net
-
 volumes:
   pgdata:
