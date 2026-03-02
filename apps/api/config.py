@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = ""
     telegram_tma_bot_username: str = ""
+    # Comma-separated Telegram user IDs that skip daily limits (e.g. for testing)
+    unlimited_tg_ids: str = ""
 
     # OpenAI
     openai_api_key: str = ""

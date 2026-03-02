@@ -14,6 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status, Header
 from sqlalchemy.orm import Session
 
+from config import get_settings
 from auth import TelegramUser, get_current_user_from_init_data
 from database import get_db
 from models import Conversation, Message, User, Subscription, Plan
@@ -86,8 +87,26 @@ def _resolve_user(
     return user
 
 
+def _unlimited_tg_ids() -> set[int]:
+    s = get_settings()
+    if not s.unlimited_tg_ids:
+        return set()
+    out: set[int] = set()
+    for x in s.unlimited_tg_ids.split(","):
+        x = x.strip()
+        if not x:
+            continue
+        try:
+            out.add(int(x))
+        except ValueError:
+            logger.warning("Invalid unlimited_tg_ids entry: %r", x)
+    return out
+
+
 def _check_limits(db: Session, user: User) -> None:
     """Enforce daily query limits; raises 429 on exceed."""
+    if user.tg_uid in _unlimited_tg_ids():
+        return
     subscription = (
         db.query(Subscription)
         .filter(Subscription.user_id == user.id, Subscription.status == "active")
