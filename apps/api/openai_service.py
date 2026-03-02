@@ -95,6 +95,7 @@ def send_message_and_run(thread_id: str, user_text: str) -> tuple[str, int]:
             break
 
     reply_text = _clean_formatting(reply_text)
+    reply_text = _remove_latex_echoes(reply_text)
 
     tokens = 0
     if run.usage:
@@ -131,6 +132,64 @@ def _clean_formatting(text: str) -> str:
     text = text.replace("\\(", "$").replace("\\)", "$")
     text = text.replace("\\[", "$$").replace("\\]", "$$")
     return text.strip()
+
+
+def _remove_latex_echoes(text: str) -> str:
+    """
+    Remove plain-text duplicates that follow inline $...$.
+    The model often writes $A_1$A1 or $MM_1$MM1 — the variable in LaTeX
+    followed by its plain-text echo (with _ and {} stripped).
+    """
+    if "$" not in text:
+        return text
+
+    def _flatten(s: str) -> str:
+        return re.sub(r"[_{}\\^]", "", s)
+
+    out: list[str] = []
+    i = 0
+    n = len(text)
+
+    while i < n:
+        if text[i] == "$":
+            # Block math $$ — pass through unchanged
+            if i + 1 < n and text[i + 1] == "$":
+                end = text.find("$$", i + 2)
+                if end == -1:
+                    out.append(text[i:])
+                    break
+                out.append(text[i : end + 2])
+                i = end + 2
+                continue
+
+            # Inline math $...$
+            close = text.find("$", i + 1)
+            if close == -1:
+                out.append(text[i:])
+                break
+
+            inner = text[i + 1 : close]
+            flat = _flatten(inner)
+            after = close + 1
+
+            # Check if echo follows and ends at a word boundary
+            if (
+                flat
+                and 1 <= len(flat) <= 20
+                and after + len(flat) <= n
+                and text[after : after + len(flat)] == flat
+                and (after + len(flat) >= n or not text[after + len(flat)].isalnum())
+            ):
+                out.append(f"${inner}$")
+                i = after + len(flat)
+            else:
+                out.append(text[i : close + 1])
+                i = close + 1
+        else:
+            out.append(text[i])
+            i += 1
+
+    return "".join(out)
 
 
 def _poll_run(client: OpenAI, thread_id: str, run_id: str):
