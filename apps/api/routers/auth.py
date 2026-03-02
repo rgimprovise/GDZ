@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from auth import TelegramUser, require_telegram_auth, validate_init_data
 from config import get_settings
 from database import get_db
-from models import User, Subscription, Plan, PlanType, SubscriptionStatus
+from models import User, Subscription, Plan
 
 settings = get_settings()
 router = APIRouter(prefix="/v1/auth", tags=["Authentication"])
@@ -93,7 +93,7 @@ def authenticate_telegram(
         is_new_user = True
         
         # Create free subscription
-        free_plan = db.query(Plan).filter(Plan.type == PlanType.FREE).first()
+        free_plan = db.query(Plan).filter(Plan.type == "free").first()
         if free_plan:
             subscription = Subscription(
                 user_id=user.id,
@@ -124,7 +124,7 @@ def authenticate_telegram(
     if subscription:
         plan = db.query(Plan).filter(Plan.id == subscription.plan_id).first()
         if plan:
-            plan_type = plan.type.value
+            plan_type = plan.type
             daily_remaining = max(0, plan.daily_queries - subscription.queries_used_today)
     
     return AuthResponse(
@@ -171,7 +171,7 @@ def get_current_user(
     if subscription:
         plan = db.query(Plan).filter(Plan.id == subscription.plan_id).first()
         if plan:
-            plan_type = plan.type.value
+            plan_type = plan.type
             daily_remaining = max(0, plan.daily_queries - subscription.queries_used_today)
             monthly_remaining = max(0, plan.monthly_queries - subscription.queries_used_month)
     

@@ -5,100 +5,93 @@ from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, Field
 
-from models import QueryStatus, PlanType, SubscriptionStatus
 
-
-# ===========================================
-# Health Check
-# ===========================================
+# ── Health ──────────────────────────────────────────
 
 class HealthResponse(BaseModel):
-    """Health check response."""
     status: str = "ok"
-    version: str = "0.1.0"
+    version: str = "0.2.0"
     timestamp: datetime
 
 
-# ===========================================
-# Query Schemas
-# ===========================================
+# ── Conversation ────────────────────────────────────
 
-class QueryCreate(BaseModel):
-    """Request to create a new query."""
-    text: Optional[str] = Field(None, description="User's text input")
-    photo_keys: Optional[List[str]] = Field(
-        default_factory=list, 
-        description="List of MinIO photo keys"
-    )
+class ConversationCreate(BaseModel):
+    title: Optional[str] = Field(None, max_length=255)
 
 
-class QueryResponse(BaseModel):
-    """Query response model."""
+class ConversationResponse(BaseModel):
     id: int
-    user_id: int
-    input_text: Optional[str]
-    status: QueryStatus
+    openai_thread_id: str
+    title: Optional[str]
     created_at: datetime
     updated_at: datetime
-    
+
     class Config:
         from_attributes = True
 
 
-class QueryDetailResponse(QueryResponse):
-    """Detailed query response with response content."""
-    extracted_text: Optional[str]
-    error_message: Optional[str]
-    response: Optional["ResponseModel"]
-
-
-class ResponseModel(BaseModel):
-    """Response content model."""
+class ConversationListItem(BaseModel):
     id: int
-    content_markdown: str
-    citations: List[dict]
-    confidence_score: Optional[int]
+    title: Optional[str]
     created_at: datetime
-    
+    updated_at: datetime
+    last_message: Optional[str] = None
+
     class Config:
         from_attributes = True
 
 
-# ===========================================
-# User Schemas  
-# ===========================================
+# ── Message ─────────────────────────────────────────
+
+class MessageSend(BaseModel):
+    """Text message input. Audio/image are sent as multipart form."""
+    text: str = Field(..., min_length=1, max_length=4000)
+
+
+class MessageResponse(BaseModel):
+    id: int
+    role: str
+    content: str
+    input_type: str
+    tokens_used: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AssistantReply(BaseModel):
+    """Pair: saved user message + assistant reply."""
+    user_message: MessageResponse
+    assistant_message: MessageResponse
+
+
+# ── User ────────────────────────────────────────────
 
 class UserResponse(BaseModel):
-    """User response model."""
     id: int
     tg_uid: int
     username: Optional[str]
     display_name: Optional[str]
     is_active: bool
     created_at: datetime
-    
+
     class Config:
         from_attributes = True
 
 
-# ===========================================
-# Plan Schemas
-# ===========================================
+# ── Plan ────────────────────────────────────────────
 
 class PlanResponse(BaseModel):
-    """Plan response model."""
     id: int
     name: str
-    type: PlanType
+    type: str
     daily_queries: int
     monthly_queries: int
     price_monthly: int
     price_yearly: int
     features: dict
-    
+
     class Config:
         from_attributes = True
-
-
-# Update forward refs
-QueryDetailResponse.model_rebuild()

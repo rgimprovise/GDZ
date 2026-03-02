@@ -1,8 +1,6 @@
 services:
-  # ===========================================
-  # Infrastructure Services
-  # ===========================================
-  
+  # ── Infrastructure ────────────────────────────────
+
   postgres:
     image: postgres:16-alpine
     container_name: tutorbot_postgres
@@ -10,7 +8,6 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-tutorbot}
       POSTGRES_USER: ${POSTGRES_USER:-tutorbot}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tutorbot}
-    # Порты задаются в docker-compose.local-ports.yml (локально) или docker-compose.vps-ports.yml (VPS)
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -20,42 +17,8 @@ services:
       retries: 5
     restart: unless-stopped
 
-  redis:
-    image: redis:7-alpine
-    container_name: tutorbot_redis
-    # Порты задаются в docker-compose.local-ports.yml (локально) или docker-compose.vps-ports.yml (VPS)
-    volumes:
-      - redisdata:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
+  # ── Application ───────────────────────────────────
 
-  minio:
-    image: minio/minio:latest
-    container_name: tutorbot_minio
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - miniodata:/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  # ===========================================
-  # Application Services
-  # ===========================================
-  
   api:
     build:
       context: ../apps/api
@@ -65,44 +28,10 @@ services:
       - .env
     environment:
       - POSTGRES_HOST=postgres
-      - REDIS_URL=redis://redis:6379/0
-      - MINIO_ENDPOINT=minio:9000
-      - DATA_DIR=/app/data
-    volumes:
-      - ../data:/app/data
     ports:
       - "8000:8000"
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    restart: unless-stopped
-
-  worker:
-    build:
-      context: ../apps/worker
-      dockerfile: Dockerfile
-    container_name: tutorbot_worker
-    env_file:
-      - .env
-    environment:
-      - PYTHONUNBUFFERED=1
-      - POSTGRES_HOST=postgres
-      - REDIS_URL=redis://redis:6379/0
-      - MINIO_ENDPOINT=minio:9000
-      - DATA_DIR=/app/data
-    volumes:
-      # PDF-файлы для ingestion (data/pdfs/...) — с хоста в контейнер
-      - ../data:/app/data
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      minio:
         condition: service_healthy
     restart: unless-stopped
 
@@ -113,16 +42,19 @@ services:
     container_name: tutorbot_bot
     env_file:
       - .env
-    environment:
-      - REDIS_URL=redis://redis:6379/0
     depends_on:
-      redis:
-        condition: service_healthy
       api:
         condition: service_started
     restart: unless-stopped
 
+  tma:
+    build:
+      context: ../apps/tma
+      dockerfile: Dockerfile
+    container_name: tutorbot_tma
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+
 volumes:
   pgdata:
-  redisdata:
-  miniodata:

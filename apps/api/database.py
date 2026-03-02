@@ -8,7 +8,7 @@ from config import get_settings
 
 settings = get_settings()
 
-# Create sync engine for Alembic and RQ jobs
+# Create sync engine
 engine = create_engine(
     settings.database_url,
     pool_pre_ping=True,

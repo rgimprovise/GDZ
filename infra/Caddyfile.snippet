@@ -1,12 +1,13 @@
-# TutorBot API (GDZ) — фрагмент для Caddy.
-# Порт 8000 свободен (заняты: 5678, 8083, 3001, 3002, 3003).
-# Добавить в общий Caddyfile и: sudo systemctl reload caddy
+# TutorBot (GDZ) — Caddy config snippet.
+# TMA (port 3000) is the main entry point.
+# Its nginx proxies /v1/* and /health to the API (port 8000) internally.
+# Add to your main Caddyfile and: sudo systemctl reload caddy
 
 gdz.n8nrgimprovise.space {
     encode gzip
-    reverse_proxy localhost:8000
+    reverse_proxy localhost:3000
 }
 
-# Debug-панель: https://gdz.n8nrgimprovise.space/debug
-# Swagger:     https://gdz.n8nrgimprovise.space/docs
-# Health:      https://gdz.n8nrgimprovise.space/health
+# API docs (optional, direct access):
+#   http://localhost:8000/docs
+#   http://localhost:8000/health

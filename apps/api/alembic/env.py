@@ -8,31 +8,25 @@ from sqlalchemy import pool
 
 from alembic import context
 
-# Import our models and config
 import sys
 sys.path.insert(0, '.')
 
 from config import get_settings
 from database import Base
-from models import User, Plan, Subscription, Query, Response  # noqa: F401
+from models import User, Plan, Subscription, Conversation, Message  # noqa: F401
 
-# this is the Alembic Config object
 config = context.config
 
-# Get database URL from our settings
 settings = get_settings()
 config.set_main_option("sqlalchemy.url", settings.database_url)
 
-# Interpret the config file for Python logging.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Model's MetaData object for autogenerate support
 target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
-    """Run migrations in 'offline' mode."""
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
@@ -46,7 +40,6 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
@@ -55,8 +48,8 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, 
-            target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
         )
 
         with context.begin_transaction():

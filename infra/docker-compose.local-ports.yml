@@ -1,12 +1,7 @@
-# Локальная разработка: публикация портов Postgres и Redis на хосте.
-# Запуск: docker-compose -f docker-compose.yml -f docker-compose.local-ports.yml up -d
-# На VPS используйте: -f docker-compose.yml -f docker-compose.vps-ports.yml
+# Expose Postgres port on the host for local development.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.local-ports.yml up -d
 
 services:
   postgres:
     ports:
       - "5432:5432"
-
-  redis:
-    ports:
-      - "6379:6379"

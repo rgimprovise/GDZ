@@ -6,16 +6,11 @@ pydantic-settings==2.1.0
 
 # Database
 sqlalchemy==2.0.25
-asyncpg==0.29.0
 psycopg2-binary==2.9.9
 alembic==1.13.1
 
-# Redis Queue
-redis==5.0.1
-rq==1.16.0
-
-# MinIO / S3
-minio==7.2.3
+# OpenAI (Assistants API, Whisper, Vision)
+openai>=1.30.0
 
 # Utilities
 python-dotenv==1.0.1

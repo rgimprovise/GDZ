@@ -1,379 +1,139 @@
 # Деплой TutorBot на VPS (Ubuntu + Caddy)
 
-Развёртывание через GitHub; на VPS уже работают Caddy и другие сервисы. Как поднять приложение, открыть debug-интерфейс и обновлять его при новых итерациях.
+## Архитектура
+
+- **postgres** — БД (users, subscriptions, conversations, messages)
+- **api** — FastAPI, OpenAI Assistants API, Whisper, Vision
+- **bot** — Telegram-бот (лаунчер TMA)
+- **tma** — React-приложение (nginx), основной интерфейс
+
+Caddy проксирует домен на TMA (порт 3000). Nginx внутри TMA проксирует `/v1/*` на API (порт 8000) внутри Docker-сети.
 
 ---
 
-## 1. Первичная настройка на VPS (один раз)
+## 1. Первоначальная настройка (один раз)
 
-### 1.1 Клонирование и окружение
-
-На VPS обычно проще клонировать по **HTTPS** (не нужен SSH-ключ для GitHub):
+### 1.1 Клонирование
 
 ```bash
-# На VPS (root или ваш пользователь)
 cd /opt
 git clone https://github.com/rgimprovise/GDZ.git tutorbot
 cd tutorbot/infra
 cp env.example .env
-nano .env   # POSTGRES_PASSWORD, BASE_URL (https://ваш-домен-для-tutorbot), TELEGRAM_*, OPENAI_* и т.д.
+nano .env
 ```
 
-Если репозиторий **приватный**, после `git clone` по HTTPS при первом `git pull` Git запросит логин и пароль — укажите ваш GitHub **логин** и **Personal Access Token** (не пароль от аккаунта). Создать токен: GitHub → Settings → Developer settings → Personal access tokens.
+Заполнить в `.env`:
+- `OPENAI_API_KEY` — ключ OpenAI
+- `OPENAI_ASSISTANT_ID` — ID ассистента (из скриншота: `asst_5g1hZDgTWyGjUBHWyBiHMpRH`)
+- `TELEGRAM_BOT_TOKEN` — токен бота
+- `TMA_URL` — `https://gdz.n8nrgimprovise.space` (URL, куда Caddy проксирует TMA)
+- `POSTGRES_PASSWORD` — сменить на безопасный
+- `JWT_SECRET` — сменить
 
-Клонирование по SSH (`git@github.com:rgimprovise/GDZ.git`) возможно только если на VPS добавлен SSH-ключ в GitHub (Settings → SSH and GPG keys или Deploy key у репозитория).
-
-**BASE_URL** укажите тот, по которому будет доступен API. Для текущего деплоя: `https://gdz.n8nrgimprovise.space`.
-
-### 1.2 Данные (PDF)
-
-Создайте каталог и при необходимости скопируйте туда PDF:
-
-```bash
-mkdir -p /opt/tutorbot/data/pdfs
-# Если PDF уже есть на компе — с компа: rsync -avz ./data/ user@VPS_IP:/opt/tutorbot/data/
-```
-
-### 1.3 Caddy: проксирование на API
-
-API в Docker слушает порт **8000** на хосте. Нужно проксировать ваш домен на `localhost:8000`.
-
-**Вариант A:** отдельный файл конфига Caddy (рекомендуется)
-
-Добавьте блок в ваш основной Caddyfile (рядом с остальными сайтами):
+### 1.2 Caddy
 
 ```bash
 sudo nano /etc/caddy/Caddyfile
 ```
 
-Вставьте блок (порт 8000 свободен; заняты у вас: 5678, 8083, 3001, 3002, 3003):
+Добавить блок:
 
 ```
-# TutorBot GDZ API
 gdz.n8nrgimprovise.space {
     encode gzip
-    reverse_proxy localhost:8000
+    reverse_proxy localhost:3000
 }
 ```
-
-Либо используйте готовый сниппет из репозитория: `cat /opt/tutorbot/infra/Caddyfile.snippet`.
-
-Перезагрузите Caddy:
 
 ```bash
 sudo systemctl reload caddy
 ```
 
-**Вариант B:** использовать готовый сниппет из репозитория
-
-```bash
-# На VPS в корне репозитория
-cat infra/Caddyfile.snippet
-# Скопировать вывод, заменить tutorbot.example.com на ваш домен, добавить в ваш Caddyfile и reload caddy
-```
-
-### 1.4 Запуск приложения
-
-**Если Docker Compose не установлен**, установите один из вариантов:
-
-```bash
-# Вариант 1: плагин Docker Compose v2 (рекомендуется, команда: docker compose)
-sudo apt update
-sudo apt install -y docker-compose-plugin
-
-# Вариант 2: старый бинарник (команда: docker-compose)
-# sudo apt install -y docker-compose
-```
-
-Проверка: `docker compose version` или `docker-compose version`.
-
-**Если порты 5432 или 6379 на VPS уже заняты** (системный Postgres/Redis и т.п.), используйте файл с другими портами. **Важно:** сначала остановите и удалите контейнеры, затем подтяните код и поднимите стек заново — иначе старые контейнеры остаются с привязкой к 5432/6379:
+### 1.3 Запуск
 
 ```bash
 cd /opt/tutorbot/infra
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml down
-cd /opt/tutorbot && git pull && cd infra
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d --build
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml exec api alembic upgrade head
+
+# Если порт 5432 занят — используйте vps-ports:
+docker compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d --build
+
+# Если порт 5432 свободен:
+docker compose up -d --build
+
+# Применить миграции
+docker compose exec api alembic upgrade head
 ```
 
-Файл `docker-compose.vps-ports.yml` пробрасывает Postgres на **5433**, Redis на **6380** (внутри сети контейнеры по-прежнему используют 5432 и 6379). На VPS используйте только `-f docker-compose.vps-ports.yml` (файла с портами 5432/6379 в репозитории нет).
-
-Локально (если 5432/6379 свободны): `docker-compose -f docker-compose.yml -f docker-compose.local-ports.yml up -d --build`
-
-Проверка:
+### 1.4 Проверка
 
 ```bash
 curl -s http://localhost:8000/health
-curl -s https://gdz.n8nrgimprovise.space/health   # через Caddy
+curl -s https://gdz.n8nrgimprovise.space/health
 ```
 
-### 1.5 Debug-интерфейс
+---
 
-После настройки Caddy debug-панель доступна по адресу:
+## 2. Обновление (при каждой итерации)
 
-- **https://gdz.n8nrgimprovise.space/debug**
-- **https://gdz.n8nrgimprovise.space/docs** — Swagger
-- **https://gdz.n8nrgimprovise.space/health** — проверка работы API
+### Локально:
 
-В debug-панели доступны:
-- **Загрузить новый учебник** — загрузка PDF через веб; файл сохраняется в `data/pdfs/`, создаётся книга и источник PDF (по имени файла — предмет/класс). Если при загрузке появляется ошибка «relation "books" does not exist» — сначала примените миграции (команда ниже).
-- **Источники PDF — начать OCR** — кнопка «Начать OCR» ставит в очередь пайплайн: Tesseract → нормализация → LLM-коррекция формул/OCR (OpenAI) → запись в файл и БД. На VPS в .env должен быть задан OPENAI_API_KEY. Worker должен быть запущен.
+```bash
+git add -A && git commit -m "описание" && git push origin main
+```
 
-**После первого подъёма или после `down -v` обязательно выполните миграции:**
+### На VPS:
+
 ```bash
 cd /opt/tutorbot/infra
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml exec api alembic upgrade head
+docker compose down
+cd /opt/tutorbot && git pull origin main
+cd infra
+docker compose up -d --build
+docker compose exec api alembic upgrade head
+```
+
+Или с vps-ports:
+
+```bash
+cd /opt/tutorbot/infra
+docker compose -f docker-compose.yml -f docker-compose.vps-ports.yml down
+cd /opt/tutorbot && git pull origin main
+cd infra
+docker compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.vps-ports.yml exec api alembic upgrade head
 ```
 
 ---
 
-## 2. Обновление приложения на каждой итерации
-
-После того как в репозитории на GitHub появились новые изменения.
-
-### 2.1 У вас (локально): отправить изменения в GitHub
-
-```bash
-cd /path/to/GDZ
-git add -A
-git status
-git commit -m "Описание изменений"
-git push origin main
-```
-
-(Вместо `main` подставьте вашу ветку, если другая.)
-
-### 2.2 На VPS: одна команда для обновления
-
-После пуша изменений на GitHub на VPS достаточно **одной команды**. Данные (БД, загруженные PDF, OCR-файлы) **не удаляются** — скрипт только подтягивает код, пересобирает образы, поднимает контейнеры и применяет миграции.
-
-**Один раз** сделайте скрипт исполняемым (если при запуске появляется «Permission denied»):
-
-```bash
-chmod +x /opt/tutorbot/scripts/update_on_vps.sh
-```
-
-**При каждом обновлении** (после `git push` с локальной машины):
-
-```bash
-cd /opt/tutorbot && ./scripts/update_on_vps.sh
-```
-
-Скрипт сам:
-- выполняет `git pull origin main`;
-- подставляет `docker-compose.vps-ports.yml` (порты 5433/6380), если файл есть;
-- останавливает контейнеры (`down` **без** `-v` — данные и volumes не удаляются);
-- собирает образы и запускает контейнеры (`build` с кэшем и `up -d`; при изменении только кода переустановка пакетов не выполняется);
-- применяет миграции БД (`alembic upgrade head`).
-
-Такой порядок (сначала `down`, затем `up -d`) избегает ошибки `KeyError: 'ContainerConfig'` у старого docker-compose при пересоздании контейнеров.
-
-Опционально: `SKIP_PULL=1 ./scripts/update_on_vps.sh` — не делать `git pull` (например, уже подтянули вручную). `BRANCH=develop` — другая ветка. Если меняли `requirements.txt` или Dockerfile и нужна полная пересборка без кэша — вручную: `cd infra && docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml build --no-cache`.
-
-Если при pull появляется «Your local changes would be overwritten», скрипт сам сбросит изменения в **отслеживаемых** файлах (`git checkout -- .`) и повторит pull. Неотслеживаемые файлы (например `.env`) не трогаются. Если на VPS вы вручную правили код и хотите сохранить правки — перед запуском скрипта сделайте `git stash`.
-
-### 2.3 Подгрузка готового нормализованного файла на VPS (без перезапуска OCR)
-
-Если вы подготовили нормализованный файл **локально** и хотите использовать его на VPS: путь на хосте — **`/opt/tutorbot/data/ocr_normalized/{book_id}/{pdf_source_id}.md`** (для книги 1 и источника 1 — `.../ocr_normalized/1/1.md`). Скопируйте файл на VPS (`scp` или `rsync`), затем в debug-панели для нужного источника нажмите **«LLM нормализация»** (опционально) и **«Распределение в БД»**. Перезапуск OCR не нужен.
-
-Подробная инструкция и случай, когда на VPS не должен попадать тестовый код (отдельная ветка, подгрузка только файла) — в [docs/UPLOAD_NORMALIZED_TO_VPS.md](UPLOAD_NORMALIZED_TO_VPS.md).
-
----
-
-## 3. Ошибка 502 (Bad Gateway)
-
-Если страница не открывается с кодом 502, Caddy не может достучаться до API на localhost:8000. Проверьте **на VPS**:
+## 3. Диагностика
 
 ```bash
 cd /opt/tutorbot/infra
 
-# 1. Все ли контейнеры запущены? (должны быть Up)
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps -a
-```
+# Статус контейнеров
+docker compose ps -a
 
-**Если при `up -d` падает с `KeyError: 'ContainerConfig'`** (часто после добавления volume к api) — баг старого docker-compose при «recreate». Снести контейнеры и поднять заново:
+# Логи
+docker compose logs --tail 100 api
+docker compose logs --tail 100 bot
+docker compose logs --tail 100 tma
 
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml down
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps -a
-```
+# Проверка API
+curl -s http://localhost:8000/health
+curl -s http://localhost:8000/docs
 
-Проверка:
-
-```bash
-# 2. Логи API — нет ли падения при старте
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs --tail 100 api
-
-# 3. Слушает ли что-то на порту 8000
-ss -tlnp | grep 8000
-curl -s http://127.0.0.1:8000/health
-```
-
-Если **Postgres или Redis в Exit 128**, смотрите их логи:
-
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs postgres
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs redis
-```
-
-Часто помогает: снести контейнеры и поднять заново (volumes сохраняются):
-
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml down
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps -a
-```
-
-Если логи postgres/redis **пустые** и контейнеры снова Exit 128 — часто виноваты **права на volume**. Тогда снести и контейнеры, и volumes (БД будет пустая) и поднять заново:
-
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml down -v
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d
-# затем: docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml exec api alembic upgrade head
-```
-
-Если после этого postgres/redis **всё ещё Exit 128**, запустите их в foreground — в консоли появится текст ошибки (затем Ctrl+C):
-
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml run --rm postgres
-# или
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml run --rm redis
-```
-
-Если при `run --rm` оба сервиса стартуют без ошибок — образы и конфиг в порядке; однократный `run --rm postgres` уже инициализирует volume. Тогда снова поднимите стек и проверьте статус:
-
-```bash
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps -a
-```
-
-Если при `up -d` снова Exit 128 — проверьте, не заняты ли порты на хосте: `ss -tlnp | grep -E '5433|6380'`. Затем запустите стек в foreground (без `-d`), чтобы увидеть вывод всех сервисов при старте: `docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up`.
-
-**Redis:** предупреждение про `vm.overcommit_memory` можно убрать на VPS: `sudo sysctl vm.overcommit_memory=1` (постоянно: добавить в `/etc/sysctl.conf` и перезагрузка).
-
-**Частые причины:**
-- **Postgres или Redis в Exit 128** — тогда api/worker не стартуют. Проверьте логи postgres и redis (команды ниже), затем перезапустите стек.
-- **"address already in use" для 5432/6379** — порты задаются только в `docker-compose.vps-ports.yml` (5433, 6380). Сначала выполните `down`, затем `git pull`, затем `up -d` — иначе старые контейнеры продолжают использовать 5432/6379.
-
----
-
-## 4. Проверка PDF на VPS
-
-Данные (в т.ч. PDF) монтируются в контейнер из каталога **`/opt/tutorbot/data`** (путь `../data` относительно `infra/`). PDF должны лежать в `data/pdfs/`.
-
-**Проверить наличие PDF на VPS:**
-
-```bash
-# Список файлов в каталоге PDF
-ls -la /opt/tutorbot/data/pdfs
-
-# Все PDF в data (включая вложенные папки)
-find /opt/tutorbot/data -name "*.pdf"
-
-# Есть ли каталог data и подкаталог pdfs
-ls -la /opt/tutorbot/data
-ls -la /opt/tutorbot/data/pdfs 2>/dev/null || echo "Каталог pdfs отсутствует"
-```
-
-Если каталога нет: `mkdir -p /opt/tutorbot/data/pdfs`. Скопировать PDF с локальной машины: `rsync -avz ./data/ user@VPS_IP:/opt/tutorbot/data/`.
-
----
-
-## 5. Debug-панель «в состоянии подгрузки»
-
-Если страница **https://gdz.n8nrgimprovise.space/debug** открывается, но блоки «Книг», «Задач», «Книги в базе» и т.д. остаются скелетонами (серые полоски), значит запросы HTMX к `/debug/api/*` не доходят или API возвращает ошибку.
-
-**Проверка на VPS:**
-
-```bash
-cd /opt/tutorbot/infra
-
-# Ответ API по статистике и книгам (должен быть HTML, не 500)
-curl -s -o /dev/null -w "%{http_code}" https://gdz.n8nrgimprovise.space/debug/api/stats
-curl -s https://gdz.n8nrgimprovise.space/debug/api/stats | head -5
-curl -s https://gdz.n8nrgimprovise.space/debug/api/books | head -5
-
-# Логи API — ошибки при запросе к БД (нет таблиц, нет подключения)
-docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs --tail 50 api
-```
-
-**Частые причины:**
-- **Миграции не применены** — таблиц `books`, `problems`, `pdf_pages` нет, API падает с 500. Выполните:  
-  `docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml exec api alembic upgrade head`
-- **БД пустая** — после миграций панель покажет нули и «Книги не найдены»; это нормально, пока не добавлены книги и PDF (seed_books, загрузка PDF в `data/pdfs/`, ingestion).
-
----
-
-## 6. Полезные команды на VPS
-
-```bash
-cd /opt/tutorbot/infra
-COMPOSE="docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml"
-```
-
-**Важно:** все команды с `docker-compose` (логи, ps, exec и т.д.) нужно выполнять из каталога **infra** — иначе будет ошибка `No such file or directory: './docker-compose.yml'`.
-
-**Логи OCR (worker)** — пайплайн Tesseract → нормализация → БД выполняется в контейнере `worker`:
-
-```bash
-# Последние 200 строк (по ним видно прогресс и ошибки)
-$COMPOSE logs --tail 200 worker
-
-# Следить в реальном времени (удобно после нажатия «Начать OCR»)
-$COMPOSE logs -f worker
-```
-
-**Логи API, статус, перезапуск:**
-
-```bash
-$COMPOSE logs -f api
-$COMPOSE ps
-$COMPOSE down && $COMPOSE up -d
+# Проверка TMA
+curl -s http://localhost:3000/
 ```
 
 ---
 
-## 7. Проверка, что всё работает
+## 4. TMA URL — как настроить
 
-Чек-лист (выполнять из `cd /opt/tutorbot/infra`, `$COMPOSE` = `docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml`):
+TMA URL — это адрес, по которому доступно мини-приложение через Telegram.
 
-| Что проверить | Команда или действие |
-|---------------|----------------------|
-| **Сервисы отвечают** | `curl -s http://127.0.0.1:8000/health` → `{"status":"ok"}` или аналог |
-| **Сайт через Caddy** | В браузере: https://gdz.n8nrgimprovise.space/health и https://gdz.n8nrgimprovise.space/debug |
-| **Все контейнеры Up** | `$COMPOSE ps -a` — api, worker, postgres, redis, minio без Exit |
-| **Логи worker (последние N строк)** | `$COMPOSE logs --tail 300 worker` — после старта задачи должны быть строки вида `📄 Processing PDF source`, `📷 OCR: Tesseract`, `📃 OCR: 1/... pages`, в конце `✅ Done` или сообщение об ошибке |
-| **Состояние OCR в БД** | В debug-панели блок «Источники PDF»: статус источника станет **done** после успешного OCR или **failed** при ошибке; блок «Книги в базе» — колонка «Задач» станет > 0 после завершения пайплайна |
-| **Очередь Redis** | При необходимости: `docker exec -it tutorbot_redis redis-cli LLEN rq:queue:ingestion` — длина очереди; `KEYS rq:job:*` — задачи |
-
-Если после строки `ingestion: ingestion.process_pdf_source(1)` в логах нет вывода (нет «Processing PDF source», «OCR: Tesseract») — включён небуферизованный вывод: в контейнере worker задано `PYTHONUNBUFFERED=1`. После обновления и перезапуска worker логи должны появляться по мере выполнения. Если задача падает сразу — проверьте, что PDF доступен воркеру: `docker exec tutorbot_worker ls -la /app/data/pdfs/`.
-
-**Проверка файлов после OCR (сырой и нормализованный текст):**  
-На хосте каталог `data` смонтирован в `/opt/tutorbot/data`. После успешного OCR должны появиться:
-- сырой OCR: `data/ocr_raw/{book_id}/{pdf_source_id}_tesseract.md`
-- нормализованный (для следующего шага/импорта): `data/ocr_normalized/{book_id}/{pdf_source_id}.md`
-
-```bash
-# Список и размер файлов (book_id=1, pdf_source_id=1)
-ls -la /opt/tutorbot/data/ocr_raw/1/
-ls -la /opt/tutorbot/data/ocr_normalized/1/
-
-# Размер и число строк нормализованного файла
-wc -l /opt/tutorbot/data/ocr_normalized/1/1.md
-head -80 /opt/tutorbot/data/ocr_normalized/1/1.md
-```
-
-Или из контейнера: `docker exec tutorbot_worker ls -la /app/data/ocr_normalized/1/` и `docker exec tutorbot_worker head -80 /app/data/ocr_normalized/1/1.md`.
-
----
-
-## 8. Итог
-
-| Действие              | Где      | Команда |
-|-----------------------|----------|---------|
-| Пуш изменений         | Локально | `git add -A && git commit -m "..." && git push origin main` |
-| Обновить на VPS       | VPS      | `cd /opt/tutorbot && ./scripts/update_on_vps.sh` |
-| Открыть debug-панель | Браузер  | **https://gdz.n8nrgimprovise.space/debug** |
-| Проверить, что всё работает | Раздел выше | §7 Проверка, что всё работает |
+1. Caddy проксирует `gdz.n8nrgimprovise.space` → `localhost:3000` (TMA)
+2. В BotFather: `/newapp` или `/editapp` → указать URL: `https://gdz.n8nrgimprovise.space`
+3. В `.env` на VPS: `TMA_URL=https://gdz.n8nrgimprovise.space`
+4. Бот показывает кнопку "Открыть TutorBot" → открывает TMA по этому URL
