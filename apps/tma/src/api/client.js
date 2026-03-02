@@ -18,11 +18,18 @@ function authHeaders() {
   return h;
 }
 
+function formatError(status, body) {
+  if (body?.detail) return body.detail;
+  if (status === 502) return "Сервер недоступен. Проверьте, что API запущен (docker-compose up api).";
+  if (status === 503) return "Сервис временно недоступен. Проверьте OPENAI_API_KEY и сеть.";
+  return `Ошибка ${status}`;
+}
+
 async function request(path, opts = {}) {
   const res = await fetch(`${BASE}${path}`, opts);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `HTTP ${res.status}`);
+    throw new Error(formatError(res.status, body));
   }
   if (res.status === 204) return null;
   return res.json();

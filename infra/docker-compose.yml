@@ -54,6 +54,9 @@ services:
     container_name: tutorbot_tma
     ports:
       - "3010:80"   # 3010 to avoid conflict with nghttpx on 3000
+    depends_on:
+      api:
+        condition: service_started
     restart: unless-stopped
 
 volumes:

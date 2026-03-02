@@ -28,7 +28,9 @@ _client: Optional[OpenAI] = None
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        _client = OpenAI(api_key=settings.openai_api_key)
+        if not (settings.openai_api_key or "").strip():
+            raise ValueError("OPENAI_API_KEY is not set")
+        _client = OpenAI(api_key=settings.openai_api_key.strip())
     return _client
 
 
@@ -36,9 +38,13 @@ def _get_client() -> OpenAI:
 
 def create_thread() -> str:
     """Create a new OpenAI thread and return its id."""
-    client = _get_client()
-    thread = client.beta.threads.create()
-    return thread.id
+    try:
+        client = _get_client()
+        thread = client.beta.threads.create()
+        return thread.id
+    except Exception as e:
+        logger.exception("OpenAI create_thread failed: %s", e)
+        raise
 
 
 def delete_thread(thread_id: str) -> None:

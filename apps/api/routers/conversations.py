@@ -128,7 +128,19 @@ def create_conversation(
 ):
     user = _resolve_user(db, tg_user, x_telegram_user_id)
 
-    thread_id = openai_service.create_thread()
+    try:
+        thread_id = openai_service.create_thread()
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="OpenAI not configured (missing API key)",
+        ) from e
+    except Exception as e:
+        logger.exception("create_thread failed: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Assistant temporarily unavailable. Check OPENAI_API_KEY and network.",
+        ) from e
 
     conv = Conversation(
         user_id=user.id,
