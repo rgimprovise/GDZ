@@ -53,7 +53,7 @@ services:
       dockerfile: Dockerfile
     container_name: tutorbot_tma
     ports:
-      - "3000:80"
+      - "3010:80"   # 3010 to avoid conflict with nghttpx on 3000
     restart: unless-stopped
 
 volumes:

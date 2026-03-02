@@ -27,7 +27,7 @@ docker compose exec api alembic upgrade head
 
 Сервисы:
 - **API**: http://localhost:8000 (docs: /docs)
-- **TMA**: http://localhost:3000
+- **TMA**: http://localhost:3010
 
 ## API Endpoints
 
@@ -53,7 +53,7 @@ docker compose exec api alembic upgrade head
 ```bash
 cd apps/tma
 npm install
-npm run dev    # http://localhost:3000, проксирует /v1/* на API
+npm run dev    # http://localhost:3000 (Vite), в Docker TMA на :3010
 ```
 
 ## Лицензия

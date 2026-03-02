@@ -7,7 +7,7 @@
 - **bot** — Telegram-бот (лаунчер TMA)
 - **tma** — React-приложение (nginx), основной интерфейс
 
-Caddy проксирует домен на TMA (порт 3000). Nginx внутри TMA проксирует `/v1/*` на API (порт 8000) внутри Docker-сети.
+Caddy проксирует домен на TMA (порт 3010). Nginx внутри TMA проксирует `/v1/*` на API (порт 8000) внутри Docker-сети.
 
 ---
 
@@ -42,7 +42,7 @@ sudo nano /etc/caddy/Caddyfile
 ```
 gdz.n8nrgimprovise.space {
     encode gzip
-    reverse_proxy localhost:3000
+    reverse_proxy localhost:3010
 }
 ```
 
@@ -124,7 +124,7 @@ curl -s http://localhost:8000/health
 curl -s http://localhost:8000/docs
 
 # Проверка TMA
-curl -s http://localhost:3000/
+curl -s http://localhost:3010/
 ```
 
 ---
@@ -133,7 +133,7 @@ curl -s http://localhost:3000/
 
 TMA URL — это адрес, по которому доступно мини-приложение через Telegram.
 
-1. Caddy проксирует `gdz.n8nrgimprovise.space` → `localhost:3000` (TMA)
+1. Caddy проксирует `gdz.n8nrgimprovise.space` → `localhost:3010` (TMA)
 2. В BotFather: `/newapp` или `/editapp` → указать URL: `https://gdz.n8nrgimprovise.space`
 3. В `.env` на VPS: `TMA_URL=https://gdz.n8nrgimprovise.space`
 4. Бот показывает кнопку "Открыть TutorBot" → открывает TMA по этому URL

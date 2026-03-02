@@ -24,7 +24,7 @@ docker compose exec api alembic upgrade head
 Services:
 - API: http://localhost:8000
 - API docs: http://localhost:8000/docs
-- TMA: http://localhost:3000
+- TMA: http://localhost:3010
 - Health: http://localhost:8000/health
 
 ## Developing TMA locally
