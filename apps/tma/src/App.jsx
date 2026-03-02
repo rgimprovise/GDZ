@@ -10,10 +10,11 @@ import {
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [authError, setAuthError] = useState(null);
+  const [error, setError] = useState(null);
   const [conversations, setConversations] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     const tg = window.Telegram?.WebApp;
@@ -22,27 +23,22 @@ export default function App() {
       tg.expand();
     }
     authenticate()
-      .then((u) => {
-        setUser(u);
-        setAuthError(null);
-      })
+      .then((u) => setUser(u))
       .catch((err) => {
         console.error("Auth failed:", err);
-        setAuthError(err.message || "Ошибка входа");
         setUser({
           user_id: 0,
-          tg_uid: 0,
-          username: null,
           display_name: "Гость",
           plan_type: "free",
-          daily_queries_remaining: 0,
-          monthly_queries_remaining: 0,
+          daily_queries_remaining: 99,
         });
       });
   }, []);
 
   const refresh = useCallback(() => {
-    listConversations().then(setConversations).catch(console.error);
+    listConversations()
+      .then(setConversations)
+      .catch((err) => console.warn("list err:", err));
   }, []);
 
   useEffect(() => {
@@ -50,16 +46,30 @@ export default function App() {
   }, [user, refresh]);
 
   const handleNew = async () => {
-    const conv = await createConversation(null);
-    setConversations((prev) => [conv, ...prev]);
-    setActiveId(conv.id);
-    setSidebarOpen(false);
+    if (creating) return;
+    setCreating(true);
+    setError(null);
+    try {
+      const conv = await createConversation(null);
+      setConversations((prev) => [conv, ...prev]);
+      setActiveId(conv.id);
+      setSidebarOpen(false);
+    } catch (err) {
+      console.error("Create conversation failed:", err);
+      setError(err.message || "Не удалось создать диалог");
+    } finally {
+      setCreating(false);
+    }
   };
 
   const handleDelete = async (id) => {
-    await deleteConversation(id);
-    setConversations((prev) => prev.filter((c) => c.id !== id));
-    if (activeId === id) setActiveId(null);
+    try {
+      await deleteConversation(id);
+      setConversations((prev) => prev.filter((c) => c.id !== id));
+      if (activeId === id) setActiveId(null);
+    } catch (err) {
+      console.error("Delete failed:", err);
+    }
   };
 
   const handleSelect = (id) => {
@@ -67,19 +77,19 @@ export default function App() {
     setSidebarOpen(false);
   };
 
+  const handleBack = () => setActiveId(null);
+
   if (!user) {
-    return <div className="loading">Loading...</div>;
+    return (
+      <div className="loading">
+        <div className="loading-spinner" />
+        <p>Загрузка TutorBot...</p>
+      </div>
+    );
   }
 
-  const isGuest = user && (user.user_id === 0 || user.display_name === "Гость");
-
   return (
-    <div className={`app ${isGuest ? "is-guest" : ""}`}>
-      {authError && (
-        <div className="auth-banner">
-          {authError}
-        </div>
-      )}
+    <div className="app">
       <Sidebar
         conversations={conversations}
         activeId={activeId}
@@ -92,32 +102,68 @@ export default function App() {
       />
       <main className="main">
         <header className="topbar">
-          <button
-            className="topbar-menu"
-            onClick={() => setSidebarOpen(true)}
-            aria-label="Menu"
-          >
-            &#9776;
-          </button>
+          {activeId ? (
+            <button className="topbar-menu" onClick={handleBack} aria-label="Back">
+              &#8592;
+            </button>
+          ) : (
+            <button
+              className="topbar-menu"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="Menu"
+            >
+              &#9776;
+            </button>
+          )}
           <span className="topbar-title">TutorBot</span>
+          {!activeId && (
+            <button className="topbar-new" onClick={handleNew} disabled={creating}>
+              +
+            </button>
+          )}
         </header>
+
+        {error && (
+          <div className="error-banner" onClick={() => setError(null)}>
+            {error} <span className="error-dismiss">&times;</span>
+          </div>
+        )}
+
         {activeId ? (
           <Chat conversationId={activeId} onRefresh={refresh} />
         ) : (
           <div className="empty-state">
+            <div className="empty-icon">📚</div>
             <h2>Твой умный помощник по учебе</h2>
-            <p>Ответы на вопросы из учебника простым языком. Подсказки для ответа у доски.</p>
-            <button className="btn-primary" onClick={handleNew}>
-              Новый диалог
+            <p>
+              Ответы на вопросы из учебника простым языком.
+              <br />
+              Подсказки для ответа у доски.
+            </p>
+            <button className="btn-primary" onClick={handleNew} disabled={creating}>
+              {creating ? "Создаю..." : "Новый диалог"}
             </button>
+
+            {conversations.length > 0 && (
+              <div className="recent-conversations">
+                <h3>Недавние диалоги</h3>
+                {conversations.slice(0, 5).map((c) => (
+                  <button
+                    key={c.id}
+                    className="recent-item"
+                    onClick={() => handleSelect(c.id)}
+                  >
+                    {c.title || c.last_message || "Без названия"}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </main>
-      {isGuest && (
-        <div className="demo-footer">
-          Демо-режим. Авторизацию подключим через бота позже.
-        </div>
-      )}
+      <div className="demo-footer">
+        Демо-режим
+      </div>
     </div>
   );
 }

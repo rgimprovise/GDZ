@@ -34,6 +34,23 @@ router = APIRouter(prefix="/v1/conversations", tags=["Conversations"])
 
 # ── helpers ─────────────────────────────────────────
 
+def _get_or_create_free_plan(db: Session) -> Plan:
+    """Return the free plan, creating it if needed."""
+    plan = db.query(Plan).filter(Plan.type == "free").first()
+    if plan:
+        return plan
+    plan = Plan(
+        name="Free", type="free",
+        daily_queries=20, monthly_queries=500,
+        price_monthly=0, price_yearly=0,
+        features={"hints_only": False},
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return plan
+
+
 def _resolve_user(
     db: Session,
     tg_user: Optional[TelegramUser],
@@ -54,17 +71,11 @@ def _resolve_user(
         except ValueError:
             pass
 
-    # No auth: use user id 1 if exists, else get or create guest (tg_uid=0)
-    user = db.query(User).filter(User.id == 1).first()
-    if user:
-        return user
     user = db.query(User).filter(User.tg_uid == 0).first()
     if user:
         return user
-    # Create guest user and free subscription
-    free_plan = db.query(Plan).filter(Plan.type == "free").first()
-    if not free_plan:
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "No free plan in DB")
+
+    free_plan = _get_or_create_free_plan(db)
     user = User(tg_uid=0, username="guest", display_name="Гость", language_code="ru")
     db.add(user)
     db.flush()

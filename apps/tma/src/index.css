@@ -23,7 +23,6 @@
 
   --sidebar-width: 280px;
   --topbar-height: 48px;
-  --input-height: 56px;
   --radius: 14px;
 }
 
@@ -49,51 +48,67 @@ body {
   position: relative;
 }
 
-.auth-banner {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  padding: 8px 12px;
-  background: #fef3c7;
-  color: #92400e;
-  font-size: 0.85rem;
-  text-align: center;
-  z-index: 200;
-}
-
-.demo-footer {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  padding: 6px 12px;
-  background: var(--secondary-bg);
-  color: var(--hint);
-  font-size: 0.75rem;
-  text-align: center;
-  z-index: 50;
-}
-
-.app.is-guest .main {
-  padding-bottom: 28px;
-}
-
 .main {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
   height: 100%;
+  padding-bottom: 24px;
 }
 
 .loading {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   height: 100%;
+  gap: 12px;
   color: var(--hint);
-  font-size: 1.1rem;
+  font-size: 1rem;
+}
+
+.loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--secondary-bg);
+  border-top: 3px solid var(--btn);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Error banner ─────────────────────────────────── */
+.error-banner {
+  padding: 10px 16px;
+  background: #fef2f2;
+  color: #991b1b;
+  font-size: 0.85rem;
+  text-align: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.error-dismiss {
+  margin-left: 8px;
+  font-weight: bold;
+}
+
+/* ── Demo footer ──────────────────────────────────── */
+.demo-footer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 5px 12px;
+  background: var(--secondary-bg);
+  color: var(--hint);
+  font-size: 0.7rem;
+  text-align: center;
+  z-index: 50;
 }
 
 /* ── Topbar ───────────────────────────────────────── */
@@ -119,6 +134,26 @@ body {
   margin-left: 8px;
   font-weight: 600;
   font-size: 1rem;
+  flex: 1;
+}
+
+.topbar-new {
+  background: var(--btn);
+  color: var(--btn-text);
+  border: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  font-size: 1.2rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.topbar-new:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* ── Sidebar ──────────────────────────────────────── */
@@ -243,15 +278,27 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 10px;
   color: var(--hint);
   padding: 24px;
   text-align: center;
 }
 
+.empty-icon {
+  font-size: 3rem;
+  margin-bottom: 4px;
+}
+
 .empty-state h2 {
   color: var(--text);
-  font-size: 1.4rem;
+  font-size: 1.3rem;
+  margin: 0;
+}
+
+.empty-state p {
+  font-size: 0.9rem;
+  line-height: 1.4;
+  max-width: 300px;
 }
 
 .btn-primary {
@@ -263,6 +310,47 @@ body {
   font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
+  margin-top: 8px;
+}
+
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.recent-conversations {
+  margin-top: 24px;
+  width: 100%;
+  max-width: 320px;
+}
+
+.recent-conversations h3 {
+  color: var(--hint);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.recent-item {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--secondary-bg);
+  border: none;
+  border-radius: 10px;
+  text-align: left;
+  font-size: 0.9rem;
+  color: var(--text);
+  cursor: pointer;
+  margin-bottom: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-item:hover {
+  opacity: 0.8;
 }
 
 /* ── Chat ─────────────────────────────────────────── */
@@ -285,11 +373,38 @@ body {
 .chat-empty {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   color: var(--hint);
   text-align: center;
   padding: 24px;
+  gap: 8px;
+}
+
+.chat-empty-icon {
+  font-size: 2.5rem;
+}
+
+.chat-empty p {
+  font-size: 1rem;
+  margin: 0;
+}
+
+.chat-empty-hint {
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.chat-error {
+  align-self: center;
+  padding: 8px 16px;
+  background: #fef2f2;
+  color: #991b1b;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  margin: 4px 0;
 }
 
 /* ── Bubbles ──────────────────────────────────────── */

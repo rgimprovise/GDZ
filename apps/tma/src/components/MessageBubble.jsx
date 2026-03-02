@@ -16,9 +16,13 @@ export default function MessageBubble({ message }) {
   return (
     <div className={`bubble ${isUser ? "user" : "assistant"}`}>
       {badge && <span className="bubble-badge">{badge}</span>}
-      <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-        {message.content}
-      </ReactMarkdown>
+      {isUser ? (
+        <p>{message.content}</p>
+      ) : (
+        <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+          {message.content}
+        </ReactMarkdown>
+      )}
     </div>
   );
 }

@@ -12,34 +12,57 @@ export default function Chat({ conversationId, onRefresh }) {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const bottomRef = useRef(null);
   const fileRef = useRef(null);
+  const inputRef = useRef(null);
 
   useEffect(() => {
-    getMessages(conversationId).then(setMessages).catch(console.error);
+    setMessages([]);
+    setError(null);
+    getMessages(conversationId)
+      .then((msgs) => setMessages(Array.isArray(msgs) ? msgs : []))
+      .catch((err) => {
+        console.error("Load messages failed:", err);
+        setError(err.message);
+      });
   }, [conversationId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, loading]);
 
   const handleSendText = async () => {
     const trimmed = text.trim();
     if (!trimmed || loading) return;
+    const userText = trimmed;
     setText("");
     setLoading(true);
+    setError(null);
+
+    const optimisticMsg = {
+      id: `tmp-${Date.now()}`,
+      role: "user",
+      content: userText,
+      input_type: "text",
+      tokens_used: 0,
+      created_at: new Date().toISOString(),
+    };
+    setMessages((prev) => [...prev, optimisticMsg]);
+
     try {
-      const reply = await sendTextMessage(conversationId, trimmed);
-      setMessages((prev) => [
-        ...prev,
-        reply.user_message,
-        reply.assistant_message,
-      ]);
+      const reply = await sendTextMessage(conversationId, userText);
+      setMessages((prev) => {
+        const filtered = prev.filter((m) => m.id !== optimisticMsg.id);
+        return [...filtered, reply.user_message, reply.assistant_message];
+      });
       onRefresh?.();
     } catch (err) {
-      alert(err.message);
+      setError(err.message || "Ошибка отправки");
+      setMessages((prev) => prev.filter((m) => m.id !== optimisticMsg.id));
     } finally {
       setLoading(false);
+      inputRef.current?.focus();
     }
   };
 
@@ -52,16 +75,13 @@ export default function Chat({ conversationId, onRefresh }) {
 
   const handleAudio = async (blob) => {
     setLoading(true);
+    setError(null);
     try {
       const reply = await sendAudio(conversationId, blob);
-      setMessages((prev) => [
-        ...prev,
-        reply.user_message,
-        reply.assistant_message,
-      ]);
+      setMessages((prev) => [...prev, reply.user_message, reply.assistant_message]);
       onRefresh?.();
     } catch (err) {
-      alert(err.message);
+      setError(err.message || "Ошибка записи");
     } finally {
       setLoading(false);
     }
@@ -71,16 +91,13 @@ export default function Chat({ conversationId, onRefresh }) {
     const file = e.target.files?.[0];
     if (!file) return;
     setLoading(true);
+    setError(null);
     try {
       const reply = await sendImage(conversationId, file);
-      setMessages((prev) => [
-        ...prev,
-        reply.user_message,
-        reply.assistant_message,
-      ]);
+      setMessages((prev) => [...prev, reply.user_message, reply.assistant_message]);
       onRefresh?.();
     } catch (err) {
-      alert(err.message);
+      setError(err.message || "Ошибка распознавания");
     } finally {
       setLoading(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -90,9 +107,11 @@ export default function Chat({ conversationId, onRefresh }) {
   return (
     <div className="chat">
       <div className="chat-messages">
-        {messages.length === 0 && !loading && (
+        {messages.length === 0 && !loading && !error && (
           <div className="chat-empty">
-            Спроси что-нибудь по учебе — текст, голос или фото задания
+            <div className="chat-empty-icon">💬</div>
+            <p>Спроси что-нибудь по учебе</p>
+            <span className="chat-empty-hint">Текст, голос или фото задания</span>
           </div>
         )}
         {messages.map((m) => (
@@ -103,6 +122,11 @@ export default function Chat({ conversationId, onRefresh }) {
             <div className="typing-indicator">
               <span /><span /><span />
             </div>
+          </div>
+        )}
+        {error && (
+          <div className="chat-error" onClick={() => setError(null)}>
+            {error}
           </div>
         )}
         <div ref={bottomRef} />
@@ -127,6 +151,7 @@ export default function Chat({ conversationId, onRefresh }) {
         />
 
         <textarea
+          ref={inputRef}
           className="chat-input-text"
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -134,6 +159,7 @@ export default function Chat({ conversationId, onRefresh }) {
           placeholder="Спроси что-нибудь по учебе..."
           rows={1}
           disabled={loading}
+          autoFocus
         />
 
         <AudioRecorder onRecorded={handleAudio} disabled={loading} />
