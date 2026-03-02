@@ -91,10 +91,10 @@ def send_message_and_run(thread_id: str, user_text: str) -> tuple[str, int]:
         if msg.role == "assistant":
             for block in msg.content:
                 if block.type == "text":
-                    reply_text += block.text.value
+                    reply_text += _strip_annotations(block.text)
             break
 
-    reply_text = _clean_annotations(reply_text)
+    reply_text = _clean_formatting(reply_text)
 
     tokens = 0
     if run.usage:
@@ -103,13 +103,31 @@ def send_message_and_run(thread_id: str, user_text: str) -> tuple[str, int]:
     return reply_text, tokens
 
 
-def _clean_annotations(text: str) -> str:
-    """Remove OpenAI file_search citation annotations and clean up formatting."""
-    # Remove 【...】 citation markers
+def _strip_annotations(text_block) -> str:
+    """
+    Remove file_search citation annotations using their exact indices.
+    OpenAI wraps cited content + 【...】 marker into a span defined by
+    start_index / end_index.  Cutting by indices removes both the marker
+    AND the duplicated character before it.
+    """
+    value = text_block.value
+    annotations = getattr(text_block, "annotations", None)
+    if not annotations:
+        return value
+
+    for ann in sorted(annotations, key=lambda a: a.start_index, reverse=True):
+        start = ann.start_index
+        end = ann.end_index
+        if 0 <= start < end <= len(value):
+            value = value[:start] + value[end:]
+
+    return value
+
+
+def _clean_formatting(text: str) -> str:
+    """Normalize LaTeX delimiters and clean up whitespace."""
     text = re.sub(r"【[^】]*】", "", text)
-    # Remove leftover double spaces from removed annotations
     text = re.sub(r"  +", " ", text)
-    # Normalize \( \) to $ $ and \[ \] to $$ $$
     text = text.replace("\\(", "$").replace("\\)", "$")
     text = text.replace("\\[", "$$").replace("\\]", "$$")
     return text.strip()
