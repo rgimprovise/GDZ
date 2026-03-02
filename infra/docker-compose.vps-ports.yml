@@ -1,7 +1,12 @@
-# Alternate Postgres port for VPS (in case 5432 is occupied).
+# Alternate ports for VPS (Postgres 5432 and TMA 3000 may be occupied).
 # Usage: docker compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d --build
+# Caddy: reverse_proxy localhost:3010  for gdz.n8nrgimprovise.space
 
 services:
   postgres:
     ports:
       - "5433:5432"
+
+  tma:
+    ports:
+      - "3010:80"
