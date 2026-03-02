@@ -49,6 +49,19 @@ body {
   position: relative;
 }
 
+.auth-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 8px 12px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 0.85rem;
+  text-align: center;
+  z-index: 200;
+}
+
 .main {
   flex: 1;
   display: flex;

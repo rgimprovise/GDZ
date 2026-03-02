@@ -10,6 +10,7 @@ import {
 
 export default function App() {
   const [user, setUser] = useState(null);
+  const [authError, setAuthError] = useState(null);
   const [conversations, setConversations] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -21,8 +22,23 @@ export default function App() {
       tg.expand();
     }
     authenticate()
-      .then((u) => setUser(u))
-      .catch(console.error);
+      .then((u) => {
+        setUser(u);
+        setAuthError(null);
+      })
+      .catch((err) => {
+        console.error("Auth failed:", err);
+        setAuthError(err.message || "Ошибка входа");
+        setUser({
+          user_id: 0,
+          tg_uid: 0,
+          username: null,
+          display_name: "Гость",
+          plan_type: "free",
+          daily_queries_remaining: 0,
+          monthly_queries_remaining: 0,
+        });
+      });
   }, []);
 
   const refresh = useCallback(() => {
@@ -57,6 +73,11 @@ export default function App() {
 
   return (
     <div className="app">
+      {authError && (
+        <div className="auth-banner">
+          {authError}
+        </div>
+      )}
       <Sidebar
         conversations={conversations}
         activeId={activeId}
