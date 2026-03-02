@@ -2,10 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+# No gcc/libpq-dev: psycopg2-binary installs as prebuilt wheel
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
