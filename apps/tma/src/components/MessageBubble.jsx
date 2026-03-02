@@ -8,20 +8,20 @@ function cleanAssistantText(raw) {
   if (!raw) return "";
   let text = raw;
 
-  // Remove OpenAI file_search citation annotations like 【4:0†source】
+  // Remove citation markers
   text = text.replace(/【[^】]*】/g, "");
-
-  // Remove sandbox citation patterns like 【†...】
   text = text.replace(/\u3010[^\u3011]*\u3011/g, "");
 
-  // Fix common broken LaTeX: "CD = BC2 + BD2" → not fixable generically,
-  // but we can fix patterns like \( ... \) → $ ... $ (some models use this)
+  // Normalize LaTeX delimiters (in case backend missed them)
   text = text.replace(/\\\(/g, "$").replace(/\\\)/g, "$");
   text = text.replace(/\\\[/g, "$$").replace(/\\\]/g, "$$");
 
-  // Ensure $$ blocks have newlines around them for proper block rendering
+  // Ensure $$ blocks have newlines for proper block rendering
   text = text.replace(/([^\n])\$\$/g, "$1\n$$");
   text = text.replace(/\$\$([^\n])/g, "$$\n$1");
+
+  // Clean {,} → , outside of $...$ blocks
+  text = text.replace(/(?<!\$[^$]*)\{,\}(?![^$]*\$)/g, ",");
 
   // Clean up excessive blank lines
   text = text.replace(/\n{4,}/g, "\n\n\n");

@@ -96,6 +96,9 @@ def send_message_and_run(thread_id: str, user_text: str) -> tuple[str, int]:
 
     reply_text = _clean_formatting(reply_text)
     reply_text = _remove_latex_echoes(reply_text)
+    reply_text = _remove_plain_echoes(reply_text)
+    reply_text = _clean_raw_latex_outside_math(reply_text)
+    logger.debug("Post-processed reply (%d chars): %.200s…", len(reply_text), reply_text)
 
     tokens = 0
     if run.usage:
@@ -126,25 +129,44 @@ def _strip_annotations(text_block) -> str:
 
 
 def _clean_formatting(text: str) -> str:
-    """Normalize LaTeX delimiters and clean up whitespace."""
+    """Normalize LaTeX delimiters, remove citation markers, trim whitespace."""
+    # Remove OpenAI citation markers 【...】
     text = re.sub(r"【[^】]*】", "", text)
-    text = re.sub(r"  +", " ", text)
+
+    # Convert \( \) → $ $ and \[ \] → $$ $$
     text = text.replace("\\(", "$").replace("\\)", "$")
     text = text.replace("\\[", "$$").replace("\\]", "$$")
+
+    # Fix space right after opening $ or before closing $ (breaks KaTeX)
+    text = re.sub(r"\$\s+", "$", text)
+    text = re.sub(r"\s+\$", "$", text)
+
+    # Collapse multiple spaces
+    text = re.sub(r"  +", " ", text)
     return text.strip()
+
+
+def _latex_to_plain(latex: str) -> str:
+    """Approximate how an inline LaTeX expression looks as plain text."""
+    s = latex
+    s = re.sub(r"\\text\s*\{([^}]*)\}", r"\1", s)
+    s = re.sub(r"\\frac\s*\{([^}]*)\}\{([^}]*)\}", r"\1/\2", s)
+    s = re.sub(r"\\sqrt\s*\{([^}]*)\}", r"√\1", s)
+    s = re.sub(r"\\[a-zA-Z]+", "", s)
+    s = re.sub(r"[{}_\\^]", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 
 def _remove_latex_echoes(text: str) -> str:
     """
     Remove plain-text duplicates that follow inline $...$.
-    The model often writes $A_1$A1 or $MM_1$MM1 — the variable in LaTeX
-    followed by its plain-text echo (with _ and {} stripped).
+
+    The model often writes  $CD = 6{,}0$CD = 6,0  — the expression in LaTeX
+    followed by its plain-text echo.  This strips the echo.
     """
     if "$" not in text:
         return text
-
-    def _flatten(s: str) -> str:
-        return re.sub(r"[_{}\\^]", "", s)
 
     out: list[str] = []
     i = 0
@@ -152,7 +174,6 @@ def _remove_latex_echoes(text: str) -> str:
 
     while i < n:
         if text[i] == "$":
-            # Block math $$ — pass through unchanged
             if i + 1 < n and text[i + 1] == "$":
                 end = text.find("$$", i + 2)
                 if end == -1:
@@ -162,26 +183,24 @@ def _remove_latex_echoes(text: str) -> str:
                 i = end + 2
                 continue
 
-            # Inline math $...$
             close = text.find("$", i + 1)
             if close == -1:
                 out.append(text[i:])
                 break
 
             inner = text[i + 1 : close]
-            flat = _flatten(inner)
+            plain = _latex_to_plain(inner)
             after = close + 1
 
-            # Check if echo follows and ends at a word boundary
             if (
-                flat
-                and 1 <= len(flat) <= 20
-                and after + len(flat) <= n
-                and text[after : after + len(flat)] == flat
-                and (after + len(flat) >= n or not text[after + len(flat)].isalnum())
+                plain
+                and 1 <= len(plain) <= 60
+                and after + len(plain) <= n
+                and text[after : after + len(plain)] == plain
+                and (after + len(plain) >= n or not text[after + len(plain)].isalnum())
             ):
                 out.append(f"${inner}$")
-                i = after + len(flat)
+                i = after + len(plain)
             else:
                 out.append(text[i : close + 1])
                 i = close + 1
@@ -190,6 +209,69 @@ def _remove_latex_echoes(text: str) -> str:
             i += 1
 
     return "".join(out)
+
+
+def _remove_plain_echoes(text: str) -> str:
+    """
+    Catch plain-text duplications the model produces OUTSIDE of $...$ blocks.
+
+    Patterns like:
+        CD = 6,0CD = 6,0 см   →  CD = 6,0 см
+        3)CM = 12,3м, м,MD = 5,8$ м:  →  cleaned up
+    """
+    # Pattern: (LETTERS = DIGITS,DIGITS)(same thing again)
+    text = re.sub(
+        r"([A-ZА-ЯЁa-zа-яё]{1,5}\s*=\s*[\d]+[,.][\d]+)"
+        r"\s*\1",
+        r"\1",
+        text,
+    )
+    # Pattern: single/few uppercase letters immediately doubled: MM → M, CDCD → CD
+    text = re.sub(r"\b([A-ZА-ЯЁ]{1,4})\1\b", r"\1", text)
+    return text
+
+
+def _clean_raw_latex_outside_math(text: str) -> str:
+    """
+    Clean up LaTeX syntax that ended up outside of $...$ blocks:
+      {,}  →  ,
+      \text{ см}  →  см
+    """
+    parts: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "$":
+            if i + 1 < n and text[i + 1] == "$":
+                end = text.find("$$", i + 2)
+                if end == -1:
+                    parts.append(text[i:])
+                    break
+                parts.append(text[i : end + 2])
+                i = end + 2
+            else:
+                close = text.find("$", i + 1)
+                if close == -1:
+                    parts.append(text[i:])
+                    break
+                parts.append(text[i : close + 1])
+                i = close + 1
+        else:
+            parts.append(text[i])
+            i += 1
+
+    result: list[str] = []
+    for p in parts:
+        if p.startswith("$"):
+            result.append(p)
+        else:
+            chunk = p
+            chunk = chunk.replace("{,}", ",")
+            chunk = re.sub(r"\\text\s*\{([^}]*)\}", r"\1", chunk)
+            chunk = re.sub(r"\\[a-zA-Z]+", "", chunk)
+            chunk = chunk.replace("{", "").replace("}", "")
+            result.append(chunk)
+    return "".join(result)
 
 
 def _poll_run(client: OpenAI, thread_id: str, run_id: str):
