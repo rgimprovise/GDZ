@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     telegram_tma_bot_username: str = ""
 
     base_url: str = "http://localhost:8000"
+    api_internal_url: str = "http://api:8000"
     tma_url: str = "https://t.me/YourBotUsername/app"
 
     class Config:

@@ -2,12 +2,13 @@
 TutorBot Telegram Bot — minimal launcher for the TMA.
 
 Features:
-- /start — welcome message + WebApp button to open TMA
+- /start — register user in DB + welcome message + WebApp button
 - /help  — brief instructions
 """
 import asyncio
 import logging
 
+import httpx
 from telegram import Update, WebAppInfo, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -26,11 +27,38 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 TMA_URL = settings.tma_url
+API_URL = settings.api_internal_url.rstrip("/")
+
+
+async def _register_user(user) -> None:
+    """Call API to register / update the Telegram user in the DB."""
+    payload = {
+        "tg_uid": user.id,
+        "username": user.username,
+        "first_name": user.first_name or "",
+        "last_name": user.last_name,
+        "language_code": user.language_code or "ru",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.post(f"{API_URL}/v1/auth/register-tg", json=payload)
+        if resp.status_code in (200, 201):
+            data = resp.json()
+            logger.info(
+                "Registered tg_uid=%s, db_id=%s, new=%s",
+                user.id, data.get("user_id"), data.get("is_new_user"),
+            )
+        else:
+            logger.warning("register-tg returned %s: %s", resp.status_code, resp.text[:200])
+    except Exception as exc:
+        logger.error("Failed to register user %s: %s", user.id, exc)
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     logger.info("User %s (%s) started the bot", user.id, user.username)
+
+    await _register_user(user)
 
     keyboard = ReplyKeyboardMarkup(
         [

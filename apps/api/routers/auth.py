@@ -35,6 +35,15 @@ class AuthResponse(BaseModel):
     daily_queries_remaining: int
 
 
+class RegisterTgRequest(BaseModel):
+    """Direct registration from the Telegram bot."""
+    tg_uid: int
+    username: Optional[str] = None
+    first_name: str = ""
+    last_name: Optional[str] = None
+    language_code: str = "ru"
+
+
 class MeResponse(BaseModel):
     """Current user info response."""
     user_id: int
@@ -44,6 +53,72 @@ class MeResponse(BaseModel):
     plan_type: str
     daily_queries_remaining: int
     monthly_queries_remaining: int
+
+
+def _find_or_create_user(
+    db: Session,
+    tg_uid: int,
+    username: Optional[str],
+    display_name: str,
+    language_code: str,
+) -> tuple[User, bool]:
+    """Return (user, is_new). Creates user + free subscription if needed."""
+    user = db.query(User).filter(User.tg_uid == tg_uid).first()
+    if user:
+        changed = False
+        if username and username != user.username:
+            user.username = username
+            changed = True
+        if display_name and display_name != user.display_name:
+            user.display_name = display_name
+            changed = True
+        if changed:
+            db.commit()
+        return user, False
+
+    user = User(
+        tg_uid=tg_uid,
+        username=username,
+        display_name=display_name or f"User {tg_uid}",
+        language_code=language_code,
+        accepted_terms_at=datetime.utcnow(),
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    free_plan = db.query(Plan).filter(Plan.type == "free").first()
+    if free_plan:
+        db.add(Subscription(user_id=user.id, plan_id=free_plan.id))
+        db.commit()
+
+    logger.info("Registered user tg_uid=%s (id=%s)", tg_uid, user.id)
+    return user, True
+
+
+def _auth_response(db: Session, user: User, is_new: bool) -> AuthResponse:
+    subscription = (
+        db.query(Subscription)
+        .filter(Subscription.user_id == user.id, Subscription.status == "active")
+        .first()
+    )
+    plan_type = "free"
+    daily_remaining = 5
+    if subscription:
+        plan = db.query(Plan).filter(Plan.id == subscription.plan_id).first()
+        if plan:
+            plan_type = plan.type
+            daily_remaining = max(0, plan.daily_queries - subscription.queries_used_today)
+
+    return AuthResponse(
+        user_id=user.id,
+        tg_uid=user.tg_uid,
+        username=user.username,
+        display_name=user.display_name,
+        is_new_user=is_new,
+        plan_type=plan_type,
+        daily_queries_remaining=daily_remaining,
+    )
 
 
 @router.post("/telegram", response_model=AuthResponse)
@@ -79,69 +154,36 @@ def authenticate_telegram(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not extract user from initData",
         )
-    
-    # Find or create user
-    user = db.query(User).filter(User.tg_uid == tg_user.id).first()
-    is_new_user = False
-    
-    if not user:
-        # Create new user
-        user = User(
-            tg_uid=tg_user.id,
-            username=tg_user.username,
-            display_name=f"{tg_user.first_name} {tg_user.last_name or ''}".strip(),
-            language_code=tg_user.language_code or "ru",
-            accepted_terms_at=datetime.utcnow(),
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        is_new_user = True
-        
-        # Create free subscription
-        free_plan = db.query(Plan).filter(Plan.type == "free").first()
-        if free_plan:
-            subscription = Subscription(
-                user_id=user.id,
-                plan_id=free_plan.id,
-            )
-            db.add(subscription)
-            db.commit()
-    else:
-        # Update user info if changed
-        if tg_user.username != user.username:
-            user.username = tg_user.username
-        display_name = f"{tg_user.first_name} {tg_user.last_name or ''}".strip()
-        if display_name != user.display_name:
-            user.display_name = display_name
-        db.commit()
-    
-    # Get active subscription
-    subscription = (
-        db.query(Subscription)
-        .filter(Subscription.user_id == user.id)
-        .filter(Subscription.status == "active")
-        .first()
+
+    display_name = f"{tg_user.first_name} {tg_user.last_name or ''}".strip()
+    user, is_new = _find_or_create_user(
+        db,
+        tg_uid=tg_user.id,
+        username=tg_user.username,
+        display_name=display_name,
+        language_code=tg_user.language_code or "ru",
     )
-    
-    plan_type = "free"
-    daily_remaining = 5
-    
-    if subscription:
-        plan = db.query(Plan).filter(Plan.id == subscription.plan_id).first()
-        if plan:
-            plan_type = plan.type
-            daily_remaining = max(0, plan.daily_queries - subscription.queries_used_today)
-    
-    return AuthResponse(
-        user_id=user.id,
-        tg_uid=user.tg_uid,
-        username=user.username,
-        display_name=user.display_name,
-        is_new_user=is_new_user,
-        plan_type=plan_type,
-        daily_queries_remaining=daily_remaining,
+    return _auth_response(db, user, is_new)
+
+
+@router.post("/register-tg", response_model=AuthResponse)
+def register_telegram_user(
+    body: RegisterTgRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Register / update a Telegram user directly (called by the bot on /start).
+    Idempotent: creates the user if new, updates display name if changed.
+    """
+    display_name = f"{body.first_name} {body.last_name or ''}".strip() or f"User {body.tg_uid}"
+    user, is_new = _find_or_create_user(
+        db,
+        tg_uid=body.tg_uid,
+        username=body.username,
+        display_name=display_name,
+        language_code=body.language_code,
     )
+    return _auth_response(db, user, is_new)
 
 
 @router.get("/me", response_model=MeResponse)
