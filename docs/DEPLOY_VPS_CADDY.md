@@ -76,32 +76,30 @@ curl -s https://gdz.n8nrgimprovise.space/health
 
 ## 2. Обновление (при каждой итерации)
 
-### Локально:
+Перед обновлением на VPS все изменения должны быть запушены в GitHub (чтобы `git pull` их подтянул).
+
+### Локально (перед деплоем):
 
 ```bash
 git add -A && git commit -m "описание" && git push origin main
 ```
 
-### На VPS:
+### На VPS (каноничная последовательность):
+
+Остановить контейнеры, подтянуть код, пересобрать образы, поднять заново. На VPS часто стоит docker-compose v1 — команда с дефисом.
 
 ```bash
-cd /opt/tutorbot/infra
-docker compose down
 cd /opt/tutorbot && git pull origin main
 cd infra
-docker compose up -d --build
-docker compose exec api alembic upgrade head
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml down
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml build --no-cache
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d
 ```
 
-Или с vps-ports:
+При необходимости миграции (после изменения схемы БД):
 
 ```bash
-cd /opt/tutorbot/infra
-docker compose -f docker-compose.yml -f docker-compose.vps-ports.yml down
-cd /opt/tutorbot && git pull origin main
-cd infra
-docker compose -f docker-compose.yml -f docker-compose.vps-ports.yml up -d --build
-docker compose -f docker-compose.yml -f docker-compose.vps-ports.yml exec api alembic upgrade head
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml exec api alembic upgrade head
 ```
 
 ---
@@ -112,12 +110,10 @@ docker compose -f docker-compose.yml -f docker-compose.vps-ports.yml exec api al
 cd /opt/tutorbot/infra
 
 # Статус контейнеров
-docker compose ps -a
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml ps -a
 
-# Логи
-docker compose logs --tail 100 api
-docker compose logs --tail 100 bot
-docker compose logs --tail 100 tma
+# Логи (v1: --tail=50 перед именем сервиса)
+docker-compose -f docker-compose.yml -f docker-compose.vps-ports.yml logs --tail=50 api
 
 # Проверка API
 curl -s http://localhost:8000/health

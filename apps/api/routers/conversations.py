@@ -103,10 +103,21 @@ def _unlimited_tg_ids() -> set[int]:
     return out
 
 
-def _check_limits(db: Session, user: User) -> None:
+def _check_limits(
+    db: Session,
+    user: User,
+    x_telegram_user_id: Optional[str] = None,
+) -> None:
     """Enforce daily query limits; raises 429 on exceed."""
-    if user.tg_uid in _unlimited_tg_ids():
+    unlimited = _unlimited_tg_ids()
+    if user.tg_uid in unlimited:
         return
+    if x_telegram_user_id:
+        try:
+            if int(x_telegram_user_id) in unlimited:
+                return
+        except ValueError:
+            pass
     subscription = (
         db.query(Subscription)
         .filter(Subscription.user_id == user.id, Subscription.status == "active")
@@ -253,7 +264,7 @@ def send_text_message(
 ):
     user = _resolve_user(db, tg_user, x_telegram_user_id)
     conv = _get_conv(db, conversation_id, user)
-    _check_limits(db, user)
+    _check_limits(db, user, x_telegram_user_id)
 
     return _process_text(db, conv, body.text, "text", user)
 
@@ -270,7 +281,7 @@ def send_audio_message(
 ):
     user = _resolve_user(db, tg_user, x_telegram_user_id)
     conv = _get_conv(db, conversation_id, user)
-    _check_limits(db, user)
+    _check_limits(db, user, x_telegram_user_id)
 
     audio_bytes = file.file.read()
     text = openai_service.transcribe_audio(audio_bytes, filename=file.filename or "audio.webm")
@@ -292,7 +303,7 @@ def send_image_message(
 ):
     user = _resolve_user(db, tg_user, x_telegram_user_id)
     conv = _get_conv(db, conversation_id, user)
-    _check_limits(db, user)
+    _check_limits(db, user, x_telegram_user_id)
 
     image_bytes = file.file.read()
     mime = file.content_type or "image/jpeg"

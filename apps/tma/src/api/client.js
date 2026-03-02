@@ -6,6 +6,10 @@ function headers() {
   if (tg?.initData) {
     h["X-Telegram-Init-Data"] = tg.initData;
   }
+  const tgUserId = tg?.initDataUnsafe?.user?.id;
+  if (tgUserId != null) {
+    h["X-Telegram-User-Id"] = String(tgUserId);
+  }
   return h;
 }
 
@@ -14,6 +18,10 @@ function authHeaders() {
   const tg = window.Telegram?.WebApp;
   if (tg?.initData) {
     h["X-Telegram-Init-Data"] = tg.initData;
+  }
+  const tgUserId = tg?.initDataUnsafe?.user?.id;
+  if (tgUserId != null) {
+    h["X-Telegram-User-Id"] = String(tgUserId);
   }
   return h;
 }
