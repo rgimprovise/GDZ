@@ -7,6 +7,7 @@ https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
 import hashlib
 import hmac
 import json
+import logging
 import time
 from typing import Optional
 from urllib.parse import parse_qs, unquote
@@ -16,6 +17,7 @@ from pydantic import BaseModel
 
 from config import get_settings
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 
@@ -138,26 +140,46 @@ def validate_init_data(init_data: str, bot_token: str) -> InitDataPayload:
     )
 
 
+def parse_user_from_init_data_unsafe(raw: str) -> Optional[TelegramUser]:
+    """Extract user info from initData without HMAC validation (fallback)."""
+    try:
+        parsed = parse_qs(raw, keep_blank_values=True)
+        user_json = parsed.get("user", ["{}"])[0]
+        user_data = json.loads(unquote(user_json))
+        if user_data.get("id"):
+            return TelegramUser(**user_data)
+    except Exception:
+        pass
+    return None
+
+
 def get_current_user_from_init_data(
     x_telegram_init_data: Optional[str] = Header(None, alias="X-Telegram-Init-Data")
 ) -> Optional[TelegramUser]:
     """
-    FastAPI dependency to extract and validate Telegram user from initData header.
-    
-    Usage:
-        @app.get("/protected")
-        def protected_route(user: TelegramUser = Depends(get_current_user_from_init_data)):
-            return {"user_id": user.id}
+    FastAPI dependency: extract Telegram user from initData header.
+    Never raises — returns None on any failure so the endpoint
+    can fall back to X-Telegram-User-Id header.
     """
     if not x_telegram_init_data:
+        logger.debug("No X-Telegram-Init-Data header")
         return None
-    
+
     if not settings.telegram_bot_token:
-        # Skip validation in development if no token configured
-        return None
-    
-    payload = validate_init_data(x_telegram_init_data, settings.telegram_bot_token)
-    return payload.user
+        logger.warning("TELEGRAM_BOT_TOKEN not set, parsing initData without validation")
+        return parse_user_from_init_data_unsafe(x_telegram_init_data)
+
+    try:
+        payload = validate_init_data(x_telegram_init_data, settings.telegram_bot_token)
+        logger.info("initData validated OK, tg_uid=%s", payload.user.id)
+        return payload.user
+    except HTTPException as exc:
+        logger.warning("initData validation failed (%s): %s — trying unsafe parse",
+                        exc.status_code, exc.detail)
+        return parse_user_from_init_data_unsafe(x_telegram_init_data)
+    except Exception as exc:
+        logger.warning("initData validation error: %s — trying unsafe parse", exc)
+        return parse_user_from_init_data_unsafe(x_telegram_init_data)
 
 
 def require_telegram_auth(

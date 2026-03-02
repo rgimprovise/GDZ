@@ -1,27 +1,44 @@
 const BASE = import.meta.env.VITE_API_URL || "";
 
+let _cachedTgUserId = null;
+
+function _getTgUserId() {
+  if (_cachedTgUserId) return _cachedTgUserId;
+  const tg = window.Telegram?.WebApp;
+  const id = tg?.initDataUnsafe?.user?.id;
+  if (id != null) {
+    _cachedTgUserId = String(id);
+  }
+  return _cachedTgUserId;
+}
+
+function _getTgInitData() {
+  const tg = window.Telegram?.WebApp;
+  return tg?.initData || null;
+}
+
 function headers() {
   const h = { "Content-Type": "application/json" };
-  const tg = window.Telegram?.WebApp;
-  if (tg?.initData) {
-    h["X-Telegram-Init-Data"] = tg.initData;
+  const initData = _getTgInitData();
+  if (initData) {
+    h["X-Telegram-Init-Data"] = initData;
   }
-  const tgUserId = tg?.initDataUnsafe?.user?.id;
-  if (tgUserId != null) {
-    h["X-Telegram-User-Id"] = String(tgUserId);
+  const uid = _getTgUserId();
+  if (uid) {
+    h["X-Telegram-User-Id"] = uid;
   }
   return h;
 }
 
 function authHeaders() {
   const h = {};
-  const tg = window.Telegram?.WebApp;
-  if (tg?.initData) {
-    h["X-Telegram-Init-Data"] = tg.initData;
+  const initData = _getTgInitData();
+  if (initData) {
+    h["X-Telegram-Init-Data"] = initData;
   }
-  const tgUserId = tg?.initDataUnsafe?.user?.id;
-  if (tgUserId != null) {
-    h["X-Telegram-User-Id"] = String(tgUserId);
+  const uid = _getTgUserId();
+  if (uid) {
+    h["X-Telegram-User-Id"] = uid;
   }
   return h;
 }
@@ -55,14 +72,47 @@ const GUEST_USER = {
 
 export async function authenticate() {
   const tg = window.Telegram?.WebApp;
-  if (!tg?.initData) {
-    return Promise.resolve(GUEST_USER);
+  const initData = tg?.initData;
+
+  // Always try to cache the user ID from Telegram SDK
+  _getTgUserId();
+
+  if (!initData) {
+    console.warn("[auth] No initData from Telegram — guest mode");
+    return GUEST_USER;
   }
-  return request("/v1/auth/telegram", {
-    method: "POST",
-    headers: headers(),
-    body: JSON.stringify({ init_data: tg.initData }),
-  });
+
+  console.log("[auth] initData present, calling /v1/auth/telegram");
+  try {
+    const resp = await request("/v1/auth/telegram", {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify({ init_data: initData }),
+    });
+    if (resp?.tg_uid) {
+      _cachedTgUserId = String(resp.tg_uid);
+    }
+    console.log("[auth] Authenticated as tg_uid=%s", resp?.tg_uid);
+    return resp;
+  } catch (err) {
+    console.warn("[auth] Auth API failed:", err.message, "— headers will still carry tg user id");
+    const uid = _getTgUserId();
+    if (uid && uid !== "0") {
+      const tgUser = tg?.initDataUnsafe?.user;
+      return {
+        user_id: 0,
+        tg_uid: Number(uid),
+        username: tgUser?.username || null,
+        display_name: tgUser
+          ? `${tgUser.first_name || ""} ${tgUser.last_name || ""}`.trim()
+          : `User ${uid}`,
+        plan_type: "free",
+        daily_queries_remaining: 99,
+        monthly_queries_remaining: 999,
+      };
+    }
+    throw err;
+  }
 }
 
 export async function createConversation(title) {

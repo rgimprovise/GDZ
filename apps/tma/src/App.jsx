@@ -161,9 +161,9 @@ export default function App() {
           </div>
         )}
       </main>
-      <div className="demo-footer">
-        Демо-режим
-      </div>
+      {(!user?.tg_uid || user.tg_uid === 0) && (
+        <div className="demo-footer">Демо-режим</div>
+      )}
     </div>
   );
 }

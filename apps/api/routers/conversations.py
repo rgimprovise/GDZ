@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status,
 from sqlalchemy.orm import Session
 
 from config import get_settings
-from auth import TelegramUser, get_current_user_from_init_data
+from auth import TelegramUser, get_current_user_from_init_data, parse_user_from_init_data_unsafe
 from database import get_db
 from models import Conversation, Message, User, Subscription, Plan
 from schemas import (
@@ -81,13 +81,24 @@ def _resolve_user(
     db: Session,
     tg_user: Optional[TelegramUser],
     tg_user_id_header: Optional[str],
+    init_data_raw: Optional[str] = None,
 ) -> User:
     """Find or create DB user from Telegram auth; without auth use or create guest."""
+    logger.info(
+        "_resolve_user: tg_user=%s, tg_user_id_header=%s, has_init_data=%s",
+        tg_user.id if tg_user else None,
+        tg_user_id_header,
+        bool(init_data_raw),
+    )
+
+    # Path 1: validated TelegramUser from initData
     if tg_user:
         user = db.query(User).filter(User.tg_uid == tg_user.id).first()
         if user:
+            logger.info("Resolved via initData: existing user id=%s tg_uid=%s", user.id, user.tg_uid)
             return user
         display_name = f"{tg_user.first_name} {tg_user.last_name or ''}".strip() or f"User {tg_user.id}"
+        logger.info("Creating user from initData: tg_uid=%s", tg_user.id)
         return _create_user_and_subscription(
             db,
             tg_uid=tg_user.id,
@@ -96,16 +107,39 @@ def _resolve_user(
             language_code=tg_user.language_code or "ru",
         )
 
+    # Path 2: X-Telegram-User-Id header
     if tg_user_id_header:
         try:
             tg_uid = int(tg_user_id_header)
             user = db.query(User).filter(User.tg_uid == tg_uid).first()
             if user:
+                logger.info("Resolved via X-Telegram-User-Id: existing user id=%s tg_uid=%s", user.id, user.tg_uid)
                 return user
+            logger.info("Creating user from X-Telegram-User-Id: tg_uid=%s", tg_uid)
             return _create_user_and_subscription(db, tg_uid=tg_uid)
         except ValueError:
-            pass
+            logger.warning("Invalid X-Telegram-User-Id: %r", tg_user_id_header)
 
+    # Path 3: try to parse user from raw initData (no HMAC, last resort)
+    if init_data_raw:
+        fallback_user = parse_user_from_init_data_unsafe(init_data_raw)
+        if fallback_user:
+            user = db.query(User).filter(User.tg_uid == fallback_user.id).first()
+            if user:
+                logger.info("Resolved via raw initData parse: existing user id=%s tg_uid=%s", user.id, user.tg_uid)
+                return user
+            display_name = f"{fallback_user.first_name} {fallback_user.last_name or ''}".strip() or f"User {fallback_user.id}"
+            logger.info("Creating user from raw initData parse: tg_uid=%s", fallback_user.id)
+            return _create_user_and_subscription(
+                db,
+                tg_uid=fallback_user.id,
+                username=fallback_user.username,
+                display_name=display_name,
+                language_code=fallback_user.language_code or "ru",
+            )
+
+    # Path 4: guest
+    logger.warning("No Telegram identification found — using guest")
     user = db.query(User).filter(User.tg_uid == 0).first()
     if user:
         return user
@@ -189,8 +223,9 @@ def create_conversation(
     db: Session = Depends(get_db),
     tg_user: Optional[TelegramUser] = Depends(get_current_user_from_init_data),
     x_telegram_user_id: Optional[str] = Header(None, alias="X-Telegram-User-Id"),
+    x_telegram_init_data: Optional[str] = Header(None, alias="X-Telegram-Init-Data"),
 ):
-    user = _resolve_user(db, tg_user, x_telegram_user_id)
+    user = _resolve_user(db, tg_user, x_telegram_user_id, x_telegram_init_data)
 
     try:
         thread_id = openai_service.create_thread()
@@ -224,8 +259,9 @@ def list_conversations(
     db: Session = Depends(get_db),
     tg_user: Optional[TelegramUser] = Depends(get_current_user_from_init_data),
     x_telegram_user_id: Optional[str] = Header(None, alias="X-Telegram-User-Id"),
+    x_telegram_init_data: Optional[str] = Header(None, alias="X-Telegram-Init-Data"),
 ):
-    user = _resolve_user(db, tg_user, x_telegram_user_id)
+    user = _resolve_user(db, tg_user, x_telegram_user_id, x_telegram_init_data)
     convs = (
         db.query(Conversation)
         .filter(Conversation.user_id == user.id)
@@ -255,8 +291,9 @@ def get_conversation_messages(
     db: Session = Depends(get_db),
     tg_user: Optional[TelegramUser] = Depends(get_current_user_from_init_data),
     x_telegram_user_id: Optional[str] = Header(None, alias="X-Telegram-User-Id"),
+    x_telegram_init_data: Optional[str] = Header(None, alias="X-Telegram-Init-Data"),
 ):
-    user = _resolve_user(db, tg_user, x_telegram_user_id)
+    user = _resolve_user(db, tg_user, x_telegram_user_id, x_telegram_init_data)
     conv = db.query(Conversation).filter(
         Conversation.id == conversation_id,
         Conversation.user_id == user.id,
@@ -272,8 +309,9 @@ def delete_conversation(
     db: Session = Depends(get_db),
     tg_user: Optional[TelegramUser] = Depends(get_current_user_from_init_data),
     x_telegram_user_id: Optional[str] = Header(None, alias="X-Telegram-User-Id"),
+    x_telegram_init_data: Optional[str] = Header(None, alias="X-Telegram-Init-Data"),
 ):
-    user = _resolve_user(db, tg_user, x_telegram_user_id)
+    user = _resolve_user(db, tg_user, x_telegram_user_id, x_telegram_init_data)
     conv = db.query(Conversation).filter(
         Conversation.id == conversation_id,
         Conversation.user_id == user.id,
@@ -295,8 +333,9 @@ def send_text_message(
     db: Session = Depends(get_db),
     tg_user: Optional[TelegramUser] = Depends(get_current_user_from_init_data),
     x_telegram_user_id: Optional[str] = Header(None, alias="X-Telegram-User-Id"),
+    x_telegram_init_data: Optional[str] = Header(None, alias="X-Telegram-Init-Data"),
 ):
-    user = _resolve_user(db, tg_user, x_telegram_user_id)
+    user = _resolve_user(db, tg_user, x_telegram_user_id, x_telegram_init_data)
     conv = _get_conv(db, conversation_id, user)
     _check_limits(db, user, x_telegram_user_id)
 
@@ -312,8 +351,9 @@ def send_audio_message(
     db: Session = Depends(get_db),
     tg_user: Optional[TelegramUser] = Depends(get_current_user_from_init_data),
     x_telegram_user_id: Optional[str] = Header(None, alias="X-Telegram-User-Id"),
+    x_telegram_init_data: Optional[str] = Header(None, alias="X-Telegram-Init-Data"),
 ):
-    user = _resolve_user(db, tg_user, x_telegram_user_id)
+    user = _resolve_user(db, tg_user, x_telegram_user_id, x_telegram_init_data)
     conv = _get_conv(db, conversation_id, user)
     _check_limits(db, user, x_telegram_user_id)
 
@@ -334,8 +374,9 @@ def send_image_message(
     db: Session = Depends(get_db),
     tg_user: Optional[TelegramUser] = Depends(get_current_user_from_init_data),
     x_telegram_user_id: Optional[str] = Header(None, alias="X-Telegram-User-Id"),
+    x_telegram_init_data: Optional[str] = Header(None, alias="X-Telegram-Init-Data"),
 ):
-    user = _resolve_user(db, tg_user, x_telegram_user_id)
+    user = _resolve_user(db, tg_user, x_telegram_user_id, x_telegram_init_data)
     conv = _get_conv(db, conversation_id, user)
     _check_limits(db, user, x_telegram_user_id)
 

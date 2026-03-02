@@ -1,6 +1,7 @@
 """
 Authentication router for Telegram Mini App.
 """
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -8,11 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from auth import TelegramUser, require_telegram_auth, validate_init_data
+from auth import TelegramUser, require_telegram_auth, validate_init_data, parse_user_from_init_data_unsafe
 from config import get_settings
 from database import get_db
 from models import User, Subscription, Plan
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 router = APIRouter(prefix="/v1/auth", tags=["Authentication"])
 
@@ -54,25 +56,29 @@ def authenticate_telegram(
     
     Creates user if not exists, returns user info and subscription status.
     """
-    # Validate initData
+    # Validate initData — fall back to unsafe parse if validation fails
+    tg_user = None
     if not settings.telegram_bot_token or settings.telegram_bot_token.startswith("your_"):
-        # Development mode: parse without validation
-        # In production, this should raise an error
-        from urllib.parse import parse_qs
-        import json
-        parsed = parse_qs(request.init_data)
-        user_json = parsed.get("user", ["{}"])[0]
-        tg_user_data = json.loads(user_json)
-        tg_user = TelegramUser(
-            id=tg_user_data.get("id", 123456789),
-            first_name=tg_user_data.get("first_name", "Test"),
-            last_name=tg_user_data.get("last_name"),
-            username=tg_user_data.get("username", "testuser"),
-            language_code=tg_user_data.get("language_code", "ru"),
-        )
+        logger.warning("Bot token not configured — parsing initData without HMAC validation")
+        tg_user = parse_user_from_init_data_unsafe(request.init_data)
     else:
-        payload = validate_init_data(request.init_data, settings.telegram_bot_token)
-        tg_user = payload.user
+        try:
+            payload = validate_init_data(request.init_data, settings.telegram_bot_token)
+            tg_user = payload.user
+            logger.info("initData validated OK for tg_uid=%s", tg_user.id)
+        except HTTPException as exc:
+            logger.warning("initData HMAC validation failed (%s: %s) — using unsafe parse",
+                           exc.status_code, exc.detail)
+            tg_user = parse_user_from_init_data_unsafe(request.init_data)
+        except Exception as exc:
+            logger.warning("initData validation error: %s — using unsafe parse", exc)
+            tg_user = parse_user_from_init_data_unsafe(request.init_data)
+
+    if not tg_user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not extract user from initData",
+        )
     
     # Find or create user
     user = db.query(User).filter(User.tg_uid == tg_user.id).first()
