@@ -130,20 +130,26 @@ def _strip_annotations(text_block) -> str:
 
 def _clean_formatting(text: str) -> str:
     """Normalize LaTeX delimiters, remove citation markers, trim whitespace."""
-    # Remove OpenAI citation markers 【...】
     text = re.sub(r"【[^】]*】", "", text)
 
-    # Convert \( \) → $ $ and \[ \] → $$ $$
     text = text.replace("\\(", "$").replace("\\)", "$")
     text = text.replace("\\[", "$$").replace("\\]", "$$")
-
-    # Fix space right after opening $ or before closing $ (breaks KaTeX)
-    text = re.sub(r"\$\s+", "$", text)
-    text = re.sub(r"\s+\$", "$", text)
 
     # Collapse multiple spaces
     text = re.sub(r"  +", " ", text)
     return text.strip()
+
+
+# Cyrillic ↔ Latin look-alikes (model echoes Latin LaTeX as Cyrillic)
+_CYR_TO_LAT = str.maketrans(
+    "АВСЕНКМОРТХУаеорсухАВСДЕНКМОРТХУ",
+    "ABCEHKMOPTXYaeopcyxABCDEHKMOPTXY",
+)
+
+
+def _normalize_echo(s: str) -> str:
+    """Map Cyrillic look-alikes to Latin so echo comparison works across scripts."""
+    return s.translate(_CYR_TO_LAT)
 
 
 def _latex_to_plain(latex: str) -> str:
@@ -158,12 +164,29 @@ def _latex_to_plain(latex: str) -> str:
     return s
 
 
+def _echo_matches(plain: str, candidate: str) -> bool:
+    """Check if candidate is an echo of plain, accounting for Cyrillic look-alikes."""
+    if plain == candidate:
+        return True
+    return _normalize_echo(plain) == _normalize_echo(candidate)
+
+
+def _is_echo_boundary(echo_last: str, next_char: str) -> bool:
+    """True if next_char is a valid boundary after an echo (not part of the same token)."""
+    if not next_char.isalnum():
+        return True
+    echo_latin = ord(echo_last) < 0x0400
+    next_latin = ord(next_char) < 0x0400
+    if echo_latin != next_latin:
+        return True
+    return False
+
+
 def _remove_latex_echoes(text: str) -> str:
     """
     Remove plain-text duplicates that follow inline $...$.
 
-    The model often writes  $CD = 6{,}0$CD = 6,0  — the expression in LaTeX
-    followed by its plain-text echo.  This strips the echo.
+    Handles both exact echoes ($A$A) and cross-script echoes ($A$А where А is Cyrillic).
     """
     if "$" not in text:
         return text
@@ -196,8 +219,9 @@ def _remove_latex_echoes(text: str) -> str:
                 plain
                 and 1 <= len(plain) <= 60
                 and after + len(plain) <= n
-                and text[after : after + len(plain)] == plain
-                and (after + len(plain) >= n or not text[after + len(plain)].isalnum())
+                and _echo_matches(plain, text[after : after + len(plain)])
+                and (after + len(plain) >= n
+                     or _is_echo_boundary(plain[-1], text[after + len(plain)]))
             ):
                 out.append(f"${inner}$")
                 i = after + len(plain)
@@ -215,19 +239,14 @@ def _remove_plain_echoes(text: str) -> str:
     """
     Catch plain-text duplications the model produces OUTSIDE of $...$ blocks.
 
-    Patterns like:
-        CD = 6,0CD = 6,0 см   →  CD = 6,0 см
-        3)CM = 12,3м, м,MD = 5,8$ м:  →  cleaned up
+    Patterns like:  CD = 6,0CD = 6,0 см  →  CD = 6,0 см
     """
-    # Pattern: (LETTERS = DIGITS,DIGITS)(same thing again)
     text = re.sub(
         r"([A-ZА-ЯЁa-zа-яё]{1,5}\s*=\s*[\d]+[,.][\d]+)"
         r"\s*\1",
         r"\1",
         text,
     )
-    # Pattern: single/few uppercase letters immediately doubled: MM → M, CDCD → CD
-    text = re.sub(r"\b([A-ZА-ЯЁ]{1,4})\1\b", r"\1", text)
     return text
 
 
