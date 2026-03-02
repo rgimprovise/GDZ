@@ -60,12 +60,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     await _register_user(user)
 
+    sep = "&" if "?" in TMA_URL else "?"
+    user_tma_url = f"{TMA_URL}{sep}tg_uid={user.id}"
+
     keyboard = ReplyKeyboardMarkup(
         [
             [
                 KeyboardButton(
                     text="Открыть TutorBot",
-                    web_app=WebAppInfo(url=TMA_URL),
+                    web_app=WebAppInfo(url=user_tma_url),
                 )
             ]
         ],
